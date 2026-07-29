@@ -14,7 +14,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.config.from_object(config_class)
 
     from app.blueprints.health.routes import health_bp
+    from app.blueprints.transactions.routes import transactions_bp
 
     app.register_blueprint(health_bp)
+    app.register_blueprint(transactions_bp)
 
     return app
