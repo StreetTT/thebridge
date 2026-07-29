@@ -62,6 +62,27 @@ class NotionClient:
                 return None
             cursor = data.get("next_cursor")
 
+    def list_names(self, data_source_id: str) -> list[str]:
+        """Return every non-empty page title in a data source, in Notion's order.
+
+        Used to offer the full category list when a merchant's category is
+        ambiguous or unknown. Pages through the whole (small) table.
+        """
+        names: list[str] = []
+        cursor = None
+        while True:
+            payload: dict = {"page_size": 100}
+            if cursor:
+                payload["start_cursor"] = cursor
+            data = self._post(f"/data_sources/{data_source_id}/query", payload)
+            for page in data.get("results", []):
+                title = _page_title(page).strip()
+                if title:
+                    names.append(title)
+            if not data.get("has_more"):
+                return names
+            cursor = data.get("next_cursor")
+
     def create_page(self, payload: dict) -> tuple[str | None, str | None]:
         """Create a page and return ``(page_id, url)`` from the response."""
         data = self._post("/pages", payload)
