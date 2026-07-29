@@ -3,6 +3,9 @@
 .venv/
 venv/
 
+# Local card -> account mapping (copy from card_accounts.example.json)
+app/data/card_accounts.json
+
 # Python
 __pycache__/
 *.py[cod]
