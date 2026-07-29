@@ -1,10 +1,10 @@
-"""Digestion: turn a raw transaction dict into a Notion page payload.
+"""Digestion + saving: turn a raw transaction dict into a Notion page.
 
-Phase 1 is a dry run. This module does all the parsing that does not require
-talking to Notion (amount sign, card -> account page id, ``Date`` and ``Month``
-from ``datetime``) and returns the computed payload. Fields that still need a
-name -> page-id lookup (``Category``, ``Month``, transfer ``To Account``) are
-returned separately under ``pending_lookups`` for Phase 2 to resolve.
+:func:`build_transaction` does the Notion-free parsing (amount sign,
+card -> account page id, ``Date`` and ``Month`` from ``datetime``) and returns
+the computed payload plus the name -> page-id relations still to resolve under
+``pending_lookups``. :func:`save_transaction` resolves those lookups against
+Notion, writes the page, and returns its id and url.
 """
 
 import json
@@ -12,7 +12,17 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from app.notion_client import NotionClient, NotionError
+
 VALID_TYPES = ("expense", "income", "transfer")
+
+# Maps a pending-lookup key to the Notion relation property it fills and the
+# config key naming the data source to search.
+_LOOKUP_TARGETS = {
+    "Category": ("Category", "CATEGORIES_DS_ID"),
+    "Month": ("Month", "MONTHS_DS_ID"),
+    "To Account": ("To Account", "ACCOUNTS_DS_ID"),
+}
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 # Real mapping is gitignored; fall back to the committed example so a fresh
@@ -185,3 +195,43 @@ def build_transaction(raw: dict, config) -> dict:
         "notion_payload": notion_payload,
         "pending_lookups": pending_lookups,
     }
+
+
+def save_transaction(raw: dict, config) -> dict:
+    """Digest ``raw``, resolve its name-based relations, and create the page.
+
+    Each pending relation (``Category``, ``Month``, transfer ``To Account``) is
+    looked up by name in Notion. Resolution is best-effort and never blocks the
+    write: a hit is added to the page properties, while a miss, a missing data
+    source id, or a lookup that errors is skipped and recorded as a
+    human-readable warning. Only the final page create can fail the request.
+
+    Returns ``{"page_id", "public_url", "warnings"}``. Raises
+    :class:`TransactionError` for bad input and :class:`~app.notion_client.NotionError`
+    only when the page create itself fails.
+    """
+    digested = build_transaction(raw, config)
+    payload = digested["notion_payload"]
+    properties = payload["properties"]
+
+    client = NotionClient(config.get("NOTION_TOKEN"), config.get("NOTION_VERSION"))
+
+    warnings: list[str] = []
+    for field, name in digested["pending_lookups"].items():
+        prop_name, ds_key = _LOOKUP_TARGETS[field]
+        data_source_id = config.get(ds_key)
+        if not data_source_id:
+            warnings.append(f"No data source configured for {field}; left blank.")
+            continue
+        try:
+            page_id = client.query_by_name(data_source_id, name)
+        except NotionError as exc:
+            warnings.append(f"Could not resolve {field} {name!r} ({exc}); left blank.")
+            continue
+        if page_id:
+            properties[prop_name] = {"relation": [{"id": page_id}]}
+        else:
+            warnings.append(f"No {field} match for {name!r}; left blank.")
+
+    page_id, public_url = client.create_page(payload)
+    return {"page_id": page_id, "public_url": public_url, "warnings": warnings}
