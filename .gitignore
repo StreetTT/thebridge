@@ -6,6 +6,9 @@ venv/
 # Local card -> account mapping (copy from card_accounts.example.json)
 app/data/card_accounts.json
 
+# Runtime-learned merchant -> category memory (auto-created on first write)
+app/data/merchant_categories.json
+
 # Python
 __pycache__/
 *.py[cod]
