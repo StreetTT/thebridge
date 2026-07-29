@@ -16,6 +16,11 @@ so future phone-to-Notion projects can add endpoints without touching existing o
   `To Account`) via `notion_client`, creates the page, and
   returns `201 {"page_id", "public_url"}`. A supplied name that has no matching
   row is skipped (never blocks the write) and reported under `warnings`.
+- **Phase 3 (Memory) — done:** a JSON store remembers which categories each
+  merchant has been filed under (learned only from bridge posts, never by
+  reading Notion). One known category auto-fills; an ambiguous or unknown
+  merchant is created uncategorised and flagged `needs_category` so the shortcut
+  can prompt, then confirm via `POST /transactions/<page_id>/category`.
 
 ## Layout
 
@@ -24,10 +29,12 @@ flask_app.py                  # PythonAnywhere WSGI entry: exposes `application`
 app/__init__.py               # create_app() factory; registers blueprints
 app/config.py                 # env vars (NOTION_TOKEN, API_SECRET) + Notion data source IDs
 app/auth.py                   # require_api_key decorator (checks X-API-Key header)
-app/notion_client.py          # requests wrapper: query_by_name, create_page, update_page
+app/notion_client.py          # requests wrapper: query_by_name, list_names, create_page, update_page
 app/blueprints/health/        # GET /health (public), GET /health/auth (key-protected)
-app/blueprints/transactions/       # POST /transactions (validate, resolve, write)
+app/blueprints/transactions/       # POST /transactions + /<id>/category (validate, resolve, write, learn)
+app/blueprints/transactions/merchant_memory.py  # JSON merchant -> category store
 app/data/card_accounts.example.json  # card label -> Accounts page id template
+app/data/merchant_categories.json    # learned merchant -> category counts (gitignored)
 ```
 
 Copy `app/data/card_accounts.example.json` to `app/data/card_accounts.json` and
@@ -70,6 +77,54 @@ response:
 ```
 
 Requires `NOTION_TOKEN` and the four `*_DS_ID` values to be configured.
+
+## Merchant memory & categories
+
+If the request omits `category`, the bridge picks one from what it has learned
+about the merchant (stored in `app/data/merchant_categories.json` as
+`{"tesco": {"Groceries": 5, "Household": 1}}`, populated **only** by bridge
+posts — it never reads the Notion table):
+
+- **One known category** → auto-filled; the write proceeds as normal.
+- **Two or more (ambiguous)** or **none (unknown merchant)** → the row is created
+  uncategorised and the response adds `needs_category`, so the shortcut prompts
+  and confirms the pick.
+
+Every success response also carries `category` (the category actually applied,
+or `null`) and `all_categories` (every category in Notion). This means the
+shortcut can **always** offer a "change category" option — even after an
+auto-fill — by letting you pick from `all_categories` and calling
+`POST /transactions/<page_id>/category`.
+
+```json
+{"page_id": "...", "public_url": "...", "category": "Groceries",
+ "all_categories": ["Groceries", "Household", "Eating Out", "..."],
+ "needs_category": true, "candidates": ["Groceries", "Household"]}
+```
+
+`candidates` (present only with `needs_category`) are the merchant's known
+categories, most-used first (empty for an unknown merchant). Whenever a category
+is actually applied (explicit, auto-filled, or confirmed) it is learned against
+the merchant. The category list is cached in-process for a few minutes, so a
+newly added Notion category may take a short while to appear.
+
+The shortcut must check response keys in order: `status` (error) →
+`needs_category` (prompt) → otherwise success (with an optional "change"
+affordance).
+
+## `POST /transactions/<page_id>/category`
+
+Sets the category the user picked after a `needs_category` response, patches the
+Notion relation, and records the association so the merchant is remembered next
+time.
+
+```bash
+curl -X POST http://127.0.0.1:5000/transactions/<page_id>/category \
+  -H "X-API-Key: <API_SECRET>" -H "Content-Type: application/json" \
+  -d '{"merchant":"Tesco","category":"Groceries"}'
+```
+
+Returns `200 {"page_id": ..., "category": ...}` on success.
 
 ## Local development
 
