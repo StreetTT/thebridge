@@ -9,9 +9,11 @@ Notion, writes the page, and returns its id and url.
 
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
+from app.blueprints.transactions import merchant_memory
 from app.notion_client import NotionClient, NotionError
 
 VALID_TYPES = ("expense", "income", "transfer")
@@ -197,8 +199,57 @@ def build_transaction(raw: dict, config) -> dict:
     }
 
 
+# Full category list is returned on every response so the shortcut can always
+# offer a "change category" option, even after an auto-fill. Categories change
+# rarely, so cache the list in-process to avoid a Notion query per transaction;
+# a new Notion category shows up once the short TTL lapses.
+_CATEGORY_CACHE_TTL = 3600  # seconds
+_category_cache: dict = {"ds": None, "names": None, "expires": 0.0}
+
+
+def _all_category_names(client: NotionClient, config) -> tuple[list[str], str | None]:
+    """Return every category name for the shortcut's picker (cached).
+
+    Returns ``(names, warning)``; ``names`` is empty and ``warning`` set when the
+    data source is unconfigured or the listing errors with no cache to fall back
+    on, so the caller can still respond (with a blank menu) rather than fail.
+    """
+    data_source_id = config.get("CATEGORIES_DS_ID")
+    if not data_source_id:
+        return [], "No CATEGORIES_DS_ID configured; all_categories unavailable."
+
+    now = time.monotonic()
+    fresh = (
+        _category_cache["ds"] == data_source_id
+        and _category_cache["names"] is not None
+        and now < _category_cache["expires"]
+    )
+    if fresh:
+        return list(_category_cache["names"]), None
+
+    try:
+        names = client.list_names(data_source_id)
+    except NotionError as exc:
+        # Serve a stale list if we have one; only report unavailable otherwise.
+        if _category_cache["ds"] == data_source_id and _category_cache["names"] is not None:
+            return list(_category_cache["names"]), None
+        return [], f"Could not list categories ({exc}); all_categories unavailable."
+
+    _category_cache.update(ds=data_source_id, names=names, expires=now + _CATEGORY_CACHE_TTL)
+    return list(names), None
+
+
 def save_transaction(raw: dict, config) -> dict:
     """Digest ``raw``, resolve its name-based relations, and create the page.
+
+    Category is chosen before the write: an explicit ``category`` wins;
+    otherwise merchant memory decides. Exactly one known category auto-fills;
+    two-or-more (ambiguous) or none (unknown merchant) leave it blank and flag
+    ``needs_category`` so the shortcut can prompt from ``candidates`` (ordered
+    most-used first). ``all_categories`` and the applied ``category`` are always
+    returned so the shortcut can offer a "change category" option even when a
+    single category was auto-filled. Whenever a category is actually applied, it
+    is learned against the merchant.
 
     Each pending relation (``Category``, ``Month``, transfer ``To Account``) is
     looked up by name in Notion. Resolution is best-effort and never blocks the
@@ -206,17 +257,39 @@ def save_transaction(raw: dict, config) -> dict:
     source id, or a lookup that errors is skipped and recorded as a
     human-readable warning. Only the final page create can fail the request.
 
-    Returns ``{"page_id", "public_url", "warnings"}``. Raises
-    :class:`TransactionError` for bad input and :class:`~app.notion_client.NotionError`
-    only when the page create itself fails.
+    Returns ``{"page_id", "public_url", "category", "warnings",
+    "needs_category", "candidates", "all_categories"}``. Raises
+    :class:`TransactionError` for bad input and
+    :class:`~app.notion_client.NotionError` only when the page create itself
+    fails.
     """
     digested = build_transaction(raw, config)
     payload = digested["notion_payload"]
     properties = payload["properties"]
+    merchant = raw.get("merchant") or ""
 
     client = NotionClient(config.get("NOTION_TOKEN"), config.get("NOTION_VERSION"))
-
     warnings: list[str] = []
+
+    # Decide the category: explicit input wins, otherwise consult memory.
+    category_to_learn = digested["parsed"]["category_name"]
+    needs_category = False
+    candidates: list[str] = []
+    if not category_to_learn:
+        known = merchant_memory.candidates(merchant_memory.load(), merchant)
+        if len(known) == 1:
+            digested["pending_lookups"]["Category"] = known[0]
+            category_to_learn = known[0]
+        else:
+            needs_category = True
+            candidates = known  # empty when unknown, ordered when ambiguous
+
+    # Always offer the full list so the pick can be changed later, even after an
+    # auto-fill or an explicit category.
+    all_categories, cat_warning = _all_category_names(client, config)
+    if cat_warning:
+        warnings.append(cat_warning)
+
     for field, name in digested["pending_lookups"].items():
         prop_name, ds_key = _LOOKUP_TARGETS[field]
         data_source_id = config.get(ds_key)
@@ -234,4 +307,46 @@ def save_transaction(raw: dict, config) -> dict:
             warnings.append(f"No {field} match for {name!r}; left blank.")
 
     page_id, public_url = client.create_page(payload)
-    return {"page_id": page_id, "public_url": public_url, "warnings": warnings}
+
+    # Only learn once the page exists, and only when a category was applied.
+    if category_to_learn:
+        merchant_memory.record(merchant, category_to_learn)
+
+    return {
+        "page_id": page_id,
+        "public_url": public_url,
+        "category": category_to_learn,
+        "warnings": warnings,
+        "needs_category": needs_category,
+        "candidates": candidates,
+        "all_categories": all_categories,
+    }
+
+
+def set_category(page_id: str, body, config) -> dict:
+    """Set the ``Category`` relation on an existing page and learn the pick.
+
+    Body is ``{"merchant": ..., "category": ...}``. Resolves the category name to
+    its Notion page id, patches the relation, and records the merchant->category
+    association. Returns ``{"page_id", "category"}``.
+    """
+    if not isinstance(body, dict):
+        raise TransactionError("Request body must be a JSON object")
+
+    category = (body.get("category") or "").strip()
+    if not category:
+        raise TransactionError("category is required")
+    merchant = body.get("merchant") or ""
+
+    data_source_id = config.get("CATEGORIES_DS_ID")
+    if not data_source_id:
+        raise TransactionError("Server has no CATEGORIES_DS_ID configured", code=500)
+
+    client = NotionClient(config.get("NOTION_TOKEN"), config.get("NOTION_VERSION"))
+    category_page_id = client.query_by_name(data_source_id, category)
+    if not category_page_id:
+        raise TransactionError(f"No Category match for {category!r}", code=404)
+
+    client.update_page(page_id, {"Category": {"relation": [{"id": category_page_id}]}})
+    merchant_memory.record(merchant, category)
+    return {"page_id": page_id, "category": category}
