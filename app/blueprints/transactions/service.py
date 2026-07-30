@@ -166,6 +166,11 @@ def build_transaction(raw: dict, config) -> dict:
     if notes:
         properties["Notes"] = {"rich_text": [{"text": {"content": notes}}]}
 
+    # Store the exact input for debugging/audit. Notion caps a single rich_text
+    # chunk at 2000 chars, so truncate the (normally tiny) payload to stay valid.
+    raw_json = json.dumps(raw, ensure_ascii=False, sort_keys=True)[:2000]
+    properties["rawPayload"] = {"rich_text": [{"text": {"content": raw_json}}]}
+
     notion_payload = {
         "parent": {
             "type": "data_source_id",

@@ -63,6 +63,11 @@ Amount is parsed by ripping digits (so `"£12.50"` -> `12.5`) and signed by
 `To Account`), transfer = `-abs` (fills `From Account`, keeps `to_account` as
 the destination). `datetime` falls back to now when missing or unparseable.
 
+The exact input payload is also written to a `rawPayload` rich-text property on
+the created page (JSON, truncated to Notion's 2000-char limit) for debugging and
+audit. Add a `rawPayload` text column to the Transactions data source to capture
+it.
+
 Name-based relations are resolved by looking up the matching row in Notion:
 `category` -> the `Category` property, the derived month -> `Month`, and a
 transfer's `to_account` -> `To Account`. Resolution is best-effort and never
