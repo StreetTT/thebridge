@@ -117,6 +117,11 @@ The shortcut must check response keys in order: `status` (error) →
 `needs_category` (prompt) → otherwise success (with an optional "change"
 affordance).
 
+If the request body includes an `_id` key, it is echoed back verbatim on the
+response (both success and error) so the caller can correlate a response with
+the request it sent. An `interactive` key is echoed the same way but only on
+success responses. This applies to both transaction endpoints.
+
 ## `POST /transactions/<page_id>/category`
 
 Sets the category the user picked after a `needs_category` response, patches the

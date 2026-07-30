@@ -21,6 +21,27 @@ from app.notion_client import NotionError
 transactions_bp = Blueprint("transactions", __name__)
 
 
+# `_id` is echoed on every response (success and error) for request/response
+# correlation; `interactive` only on success, since it drives client behaviour
+# for a transaction that was actually created.
+_PASSTHROUGH_KEYS = ("_id",)
+_PASSTHROUGH_KEYS_SUCCESS = ("_id", "interactive")
+
+
+def _echo_passthrough(raw, body, keys):
+    """Copy client-supplied ``keys`` from the request through to the response.
+
+    Lets the caller (e.g. the Apple Shortcut) correlate a response with the
+    request it sent. Only copies a key when the request body is a dict that
+    carries it.
+    """
+    if not isinstance(raw, dict):
+        return
+    for key in keys:
+        if key in raw:
+            body[key] = raw[key]
+
+
 @transactions_bp.post("/transactions")
 @require_api_key
 def create_transaction():
@@ -32,7 +53,9 @@ def create_transaction():
     try:
         result = save_transaction(raw, current_app.config)
     except (TransactionError, NotionError) as exc:
-        return jsonify(status=exc.code, message=str(exc)), exc.code
+        error = {"status": exc.code, "message": str(exc)}
+        _echo_passthrough(raw, error, _PASSTHROUGH_KEYS)
+        return jsonify(**error), exc.code
 
     # `category` (applied, may be null) and `all_categories` ship on every
     # response so the shortcut can always offer a "change category" option that
@@ -48,6 +71,7 @@ def create_transaction():
         body["candidates"] = result["candidates"]
     if result["warnings"]:
         body["warnings"] = result["warnings"]
+    _echo_passthrough(raw, body, _PASSTHROUGH_KEYS_SUCCESS)
     return jsonify(**body), 201
 
 
@@ -59,6 +83,9 @@ def set_transaction_category(page_id):
     try:
         result = set_category(page_id, body, current_app.config)
     except (TransactionError, NotionError) as exc:
-        return jsonify(status=exc.code, message=str(exc)), exc.code
+        error = {"status": exc.code, "message": str(exc)}
+        _echo_passthrough(body, error, _PASSTHROUGH_KEYS)
+        return jsonify(**error), exc.code
 
+    _echo_passthrough(body, result, _PASSTHROUGH_KEYS_SUCCESS)
     return jsonify(**result), 200
