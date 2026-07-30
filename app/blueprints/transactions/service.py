@@ -333,7 +333,9 @@ def set_category(page_id: str, body, config) -> dict:
 
     Body is ``{"merchant": ..., "category": ...}``. Resolves the category name to
     its Notion page id, patches the relation, and records the merchant->category
-    association. Returns ``{"page_id", "category"}``.
+    association. Returns ``{"page_id", "public_url", "category"}`` — the
+    ``public_url`` comes straight off the patched page so the shortcut can link
+    to it after a category change too.
     """
     if not isinstance(body, dict):
         raise TransactionError("Request body must be a JSON object")
@@ -352,6 +354,10 @@ def set_category(page_id: str, body, config) -> dict:
     if not category_page_id:
         raise TransactionError(f"No Category match for {category!r}", code=404)
 
-    client.update_page(page_id, {"Category": {"relation": [{"id": category_page_id}]}})
+    updated = client.update_page(page_id, {"Category": {"relation": [{"id": category_page_id}]}})
     merchant_memory.record(merchant, category)
-    return {"page_id": page_id, "category": category}
+    return {
+        "page_id": page_id,
+        "public_url": updated.get("url"),
+        "category": category,
+    }

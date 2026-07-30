@@ -134,7 +134,12 @@ curl -X POST http://127.0.0.1:5000/transactions/<page_id>/category \
   -d '{"merchant":"Tesco","category":"Groceries"}'
 ```
 
-Returns `200 {"page_id": ..., "category": ...}` on success.
+Returns `200 {"page_id": ..., "public_url": ..., "category": ...}` on success,
+where `public_url` is the same Notion link the create endpoint returns.
+
+Note: `<page_id>` in the URL must be the **Notion** page id returned by
+`POST /transactions` (the `page_id` field), not the client-supplied `_id` echoed
+back on the response. Sending the `_id` here makes Notion fail to find the page.
 
 ## Local development
 
