@@ -23,7 +23,6 @@ VALID_TYPES = ("expense", "income", "transfer")
 _LOOKUP_TARGETS = {
     "Category": ("Category", "CATEGORIES_DS_ID"),
     "Month": ("Month", "MONTHS_DS_ID"),
-    "To Account": ("To Account", "ACCOUNTS_DS_ID"),
 }
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -162,6 +161,17 @@ def build_transaction(raw: dict, config) -> dict:
         account_role: {"relation": [{"id": account_page_id}]},
     }
 
+    # A transfer also credits a destination account. Resolve it from the same
+    # card_accounts label -> page-id map as the source so both ends link reliably
+    if txn_type == "transfer" and to_account_name:
+        to_account_page_id = card_accounts.get(to_account_name)
+        if not to_account_page_id:
+            known = ", ".join(sorted(card_accounts)) or "none configured"
+            raise TransactionError(
+                f"Unknown to_account {to_account_name!r}. Known accounts: {known}."
+            )
+        properties["To Account"] = {"relation": [{"id": to_account_page_id}]}
+
     notes = (raw.get("notes") or "").strip()
     if notes:
         properties["Notes"] = {"rich_text": [{"text": {"content": notes}}]}
@@ -184,8 +194,6 @@ def build_transaction(raw: dict, config) -> dict:
     if category_name:
         pending_lookups["Category"] = category_name
     pending_lookups["Month"] = month_name
-    if txn_type == "transfer" and to_account_name:
-        pending_lookups["To Account"] = to_account_name
 
     return {
         "type": txn_type,
@@ -256,8 +264,8 @@ def save_transaction(raw: dict, config) -> dict:
     single category was auto-filled. Whenever a category is actually applied, it
     is learned against the merchant.
 
-    Each pending relation (``Category``, ``Month``, transfer ``To Account``) is
-    looked up by name in Notion. Resolution is best-effort and never blocks the
+    Each pending relation (``Category``, ``Month``) is looked up by name in
+    Notion. Resolution is best-effort and never blocks the
     write: a hit is added to the page properties, while a miss, a missing data
     source id, or a lookup that errors is skipped and recorded as a
     human-readable warning. Only the final page create can fail the request.

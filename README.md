@@ -60,8 +60,15 @@ treats as a failure.
 
 Amount is parsed by ripping digits (so `"£12.50"` -> `12.5`) and signed by
 `type`: expense = `-abs` (fills `From Account`), income = `+abs` (fills
-`To Account`), transfer = `-abs` (fills `From Account`, keeps `to_account` as
-the destination). `datetime` falls back to now when missing or unparseable.
+`To Account`), transfer = `-abs` (fills `From Account`, plus `to_account` as the
+destination `To Account`). `datetime` falls back to now when missing or
+unparseable.
+
+Both accounts on a transfer come from `card_accounts.json`: `card` sets
+`From Account` and `to_account` sets `To Account`, each mapping a label to an
+account page id. So `to_account` must be a label present in that file (the same
+labels `card` accepts), not a Notion account title. An unknown `to_account`
+label is rejected with an error rather than silently left blank.
 
 The exact input payload is also written to a `rawPayload` rich-text property on
 the created page (JSON, truncated to Notion's 2000-char limit) for debugging and
@@ -69,8 +76,8 @@ audit. Add a `rawPayload` text column to the Transactions data source to capture
 it.
 
 Name-based relations are resolved by looking up the matching row in Notion:
-`category` -> the `Category` property, the derived month -> `Month`, and a
-transfer's `to_account` -> `To Account`. Resolution is best-effort and never
+`category` -> the `Category` property and the derived month -> `Month`.
+Resolution is best-effort and never
 blocks the write: a name with no matching row — or a lookup that errors (e.g. a
 data source not shared with the integration) — is left blank instead of failing,
 and each skip is reported in an optional `warnings` array on the success
