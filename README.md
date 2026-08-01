@@ -263,7 +263,7 @@ endpoints.
 ### Enabling an account
 
 1. Tick `Earns Interest` on the account row.
-2. Set `AER` (as a percent) and `Interest Payment Day`.
+2. Set `AER %` (as a percent) and `Interest Payment Day`.
 3. Ensure the account resolves as a card (codename or `Apple Card`) so the payout
    can be filed. `212 Saving` already resolves via its codename.
 
@@ -307,9 +307,9 @@ changes:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SAVINGS_EARNS_INTEREST_PROPERTY` | `Earns Interest` | Checkbox that enrols an account |
-| `SAVINGS_AER_PROPERTY` | `AER` | Number holding the AER as a percent |
+| `SAVINGS_AER_PROPERTY` | `AER %` | Number holding the AER as a percent |
 | `SAVINGS_PAYMENT_DAY_PROPERTY` | `Interest Payment Day` | Number: day of month interest is paid |
-| `SAVINGS_BALANCE_PROPERTY` | `Current Balance` | Number/formula interest accrues on |
+| `SAVINGS_BALANCE_PROPERTY` | `Current Balance` | Number/formula/rollup interest accrues on |
 | `SAVINGS_ACCRUED_PROPERTY` | `Accrued Interest` | Number the bridge writes the running total to |
 | `SAVINGS_LAST_ACCRUED_PROPERTY` | `Last Accrued` | Date driving daily idempotency |
 | `SAVINGS_LAST_PAID_PROPERTY` | `Last Interest Paid` | Date guarding one payout per month |

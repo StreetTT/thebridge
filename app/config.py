@@ -40,7 +40,7 @@ class Config:
     SAVINGS_EARNS_INTEREST_PROPERTY = os.environ.get(
         "SAVINGS_EARNS_INTEREST_PROPERTY", "Earns Interest"
     )
-    SAVINGS_AER_PROPERTY = os.environ.get("SAVINGS_AER_PROPERTY", "AER")
+    SAVINGS_AER_PROPERTY = os.environ.get("SAVINGS_AER_PROPERTY", "AER %")
     SAVINGS_PAYMENT_DAY_PROPERTY = os.environ.get(
         "SAVINGS_PAYMENT_DAY_PROPERTY", "Interest Payment Day"
     )

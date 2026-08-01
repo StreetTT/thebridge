@@ -72,9 +72,18 @@ def interest_accounts(client: NotionClient, config) -> tuple[list[dict], list[st
 
     accounts: list[dict] = []
     warnings: list[str] = []
+    # Counters so an empty result explains itself instead of failing silently
+    rows_read = 0
+    rows_with_earns_prop = 0
+    rows_enrolled = 0
     for page in client.query_all(data_source_id):
+        rows_read += 1
+        if earns_prop in page.get("properties", {}):
+            rows_with_earns_prop += 1
+
         if not _checkbox(page, earns_prop) or _checkbox(page, _ARCHIVED_PROPERTY):
             continue
+        rows_enrolled += 1
 
         name = _title(page) or "(untitled account)"
         aer_percent = _number(page, aer_prop)
@@ -84,8 +93,19 @@ def interest_accounts(client: NotionClient, config) -> tuple[list[dict], list[st
         # the account cannot accrue or ever pay out, so it is not a valid
         # interest-earning account and is skipped rather than guessed at.
         if aer_percent is None or balance is None or payment_day is None:
+            unreadable = []
+            if aer_percent is None:
+                unreadable.append(f"AER ({_number_diag(page, aer_prop)})")
+            if balance is None:
+                unreadable.append(f"balance ({_number_diag(page, balance_prop)})")
+            if payment_day is None:
+                unreadable.append(
+                    f"payment day ({_number_diag(page, payment_day_prop)})"
+                )
             warnings.append(
-                f"Account {name!r} is missing AER, balance, or payment day; skipped."
+                f"Account {name!r} skipped — could not read a number for: "
+                + "; ".join(unreadable)
+                + "."
             )
             continue
 
@@ -100,7 +120,33 @@ def interest_accounts(client: NotionClient, config) -> tuple[list[dict], list[st
             "last_accrued": _date(page, last_accrued_prop),
             "last_paid": _date(page, last_paid_prop),
         })
+
+    # Only diagnose the "no enrolled rows" case here; 
+    if rows_enrolled == 0:
+        warnings.append(_no_accounts_reason(rows_read, rows_with_earns_prop, earns_prop))
     return accounts, warnings
+
+
+def _no_accounts_reason(rows_read: int, rows_with_earns_prop: int, earns_prop: str) -> str:
+    """Explain why no interest-earning account was found, for the response.
+
+    Distinguishes the three silent failure modes that all otherwise surface as
+    an empty ``accounts`` list: nothing in the data source, the enrol property
+    not present on any row (a name mismatch), or the property present but never
+    ticked (or the ticked rows are ``Archived``).
+    """
+    if rows_read == 0:
+        return "No account rows were read from the Accounts data source."
+    if rows_with_earns_prop == 0:
+        return (
+            f"Read {rows_read} account rows, but none has a property named "
+            f"{earns_prop!r}. Check the Notion column name matches "
+            "SAVINGS_EARNS_INTEREST_PROPERTY (names are case- and space-sensitive)."
+        )
+    return (
+        f"Read {rows_read} account rows; {earns_prop!r} exists but is not ticked "
+        "on any non-archived row. Tick it (and set AER + payment day) to enrol."
+    )
 
 
 def accrue_interest(account: dict, today: date) -> tuple[float, float]:
@@ -275,9 +321,33 @@ def _number(page: dict, name: str) -> float | None:
     ``Current Balance``, whose value sits under ``formula.number``).
     """
     prop = page.get("properties", {}).get(name) or {}
-    if prop.get("type") == "formula":
+    prop_type = prop.get("type")
+    # Formula and rollup wrap the numeric value one level deeper
+    if prop_type == "formula":
         return (prop.get("formula") or {}).get("number")
+    if prop_type == "rollup":
+        return (prop.get("rollup") or {}).get("number")
     return prop.get("number")
+
+
+def _number_diag(page: dict, name: str) -> str:
+    """Describe why :func:`_number` could not read ``name`` — for a warning.
+
+    Names the mismatch a user actually hits: no such column (a name typo), or a
+    column of the wrong type (e.g. a ``date`` payment day, or a ``select`` AER)
+    that holds no plain number.
+    """
+    prop = page.get("properties", {}).get(name)
+    if prop is None:
+        return f"no column named {name!r}"
+    prop_type = prop.get("type")
+    if prop_type == "formula":
+        inner = (prop.get("formula") or {}).get("type")
+        return f"column {name!r} is a formula returning {inner!r}, not a number"
+    if prop_type == "rollup":
+        inner = (prop.get("rollup") or {}).get("type")
+        return f"column {name!r} is a rollup of type {inner!r}, not a single number"
+    return f"column {name!r} is a {prop_type!r}, not a number"
 
 
 def _date(page: dict, name: str) -> date | None:
