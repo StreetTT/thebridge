@@ -21,6 +21,11 @@ so future phone-to-Notion projects can add endpoints without touching existing o
   reading Notion). One known category auto-fills; an ambiguous or unknown
   merchant is created uncategorised and flagged `needs_category` so the shortcut
   can prompt, then confirm via `POST /transactions/<page_id>/category`.
+- **Savings interest — done:** `POST /savings/accrue` computes the interest
+  Trading 212's API never exposes. A daily scheduled task accrues each
+  interest-earning account's interest into Notion and, on the account's payment
+  day, files the accumulated total as an income transaction (see
+  [Savings interest](#savings-interest)).
 
 ## Layout
 
@@ -29,10 +34,11 @@ flask_app.py                  # PythonAnywhere WSGI entry: exposes `application`
 app/__init__.py               # create_app() factory; registers blueprints
 app/config.py                 # env vars (NOTION_TOKEN, API_SECRET) + Notion data source IDs
 app/auth.py                   # require_api_key decorator (checks X-API-Key header)
-app/notion_client.py          # requests wrapper: query_by_name, list_names, list_accounts, create_page, update_page
+app/notion_client.py          # requests wrapper: query_by_name, list_names, query_all, list_accounts, create_page, update_page
 app/blueprints/health/        # GET /health (public), GET /health/auth (key-protected)
 app/blueprints/transactions/       # POST /transactions + /<id>/category (validate, resolve, write, learn)
 app/blueprints/transactions/merchant_memory.py  # JSON merchant -> category store
+app/blueprints/savings/       # POST /savings/accrue (daily interest accrual + monthly payout)
 app/data/merchant_categories.json    # learned merchant -> category counts (gitignored)
 ```
 
@@ -194,6 +200,76 @@ Note: `<page_id>` in the URL must be the **Notion** page id returned by
 `POST /transactions` (the `page_id` field), not the client-supplied `_id` echoed
 back on the response. Sending the `_id` here makes Notion fail to find the page.
 
+## Savings interest
+
+The feature is driven entirely from Notion: tick an **`Earns Interest`** checkbox 
+on any account and fill in its rate, and the bridge picks it up — no code or 
+config change per account.
+
+Notion is the single source of truth for the accrued state, so there is no local
+ledger to keep in sync and the accrual survives a PythonAnywhere disk reset.
+
+### The model (accrual vs. transaction)
+
+- **Accrual** is not a transaction. Each day the bridge adds that day's interest
+  to an **`Accrued Interest`** number on the account row — it never touches your
+  balance or writes to the Transactions table.
+- **Payout** is a transaction. On the account's payment day — or the first run
+  after it that month, if a run was missed — the accumulated `Accrued Interest`
+  is filed as a single **income** transaction (through the same trusted write
+  path as `POST /transactions`) and the accrual resets to 0.
+
+The daily rate is the compound-equivalent `(1 + AER) ^ (1/365) - 1`, applied to
+`Current Balance` (which excludes the unpaid accrual, so there is no intra-month
+compounding — the daily rate already reflects AER's annual compounding). Because
+accrual runs **daily**, a mid-month AER change is captured correctly: each day is
+accrued at whatever rate was in effect that day, and a later change never
+rewrites what already accrued.
+
+The pass is idempotent per day (guarded by `Last Accrued`) and pays out at most
+once a month (guarded by `Last Interest Paid`), so a scheduled task that fires
+twice never double-accrues or double-pays. A missed day is caught up on the next
+run at the current balance as an approximation. Because the payout fires on the
+payment day **or the first run after it**, a missed run on the day itself still
+pays that month, and any `Interest Payment Day` is safe — including values like
+`31` in short months (it pays on the last run of the month instead).
+
+The payout is filed against the account like any other transaction, so the
+account must still resolve as a `card` (its codename or `Apple Card` value — see
+[Account links](#account-links)). An account that is due a payout but can't be
+resolved keeps accruing and the response reports it under `warnings`.
+
+### `POST /savings/accrue`
+
+Runs the daily pass. Send with the `X-API-Key` header and no body.
+
+```bash
+curl -X POST http://127.0.0.1:5000/savings/accrue -H "X-API-Key: <API_SECRET>"
+```
+
+Returns `200` with a per-account snapshot plus any `warnings`:
+
+```json
+{"accounts": [{"page_id": "...", "name": "212 Saving", "public_url": "...",
+   "balance": 5000.0, "daily_rate": 0.0000969, "todays_interest": 0.4846,
+   "accrued": 14.53, "paid": false}],
+ "warnings": []}
+```
+
+`paid` is `true` on the run that files the monthly transaction (with `accrued`
+reset to 0). Errors use the same `{status, message}` shape as the other
+endpoints.
+
+### Enabling an account
+
+1. Tick `Earns Interest` on the account row.
+2. Set `AER` (as a percent) and `Interest Payment Day`.
+3. Ensure the account resolves as a card (codename or `Apple Card`) so the payout
+   can be filed. `212 Saving` already resolves via its codename.
+
+The first payout after enabling covers only the days accrued so far that month
+(a partial month), which is expected.
+
 ## Local development
 
 ```bash
@@ -224,6 +300,22 @@ Set via environment variables (or a local `.env`):
 | `API_SECRET` | yes | Shared secret sent in the `X-API-Key` header |
 | `TRANSACTIONS_DS_ID` / `ACCOUNTS_DS_ID` / `CATEGORIES_DS_ID` / `MONTHS_DS_ID` | yes | Set the Notion data source IDs |
 
+Savings interest is configured entirely by optional env vars (defaults shown),
+so the Accounts schema can be renamed and the payout labels tuned without code
+changes:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SAVINGS_EARNS_INTEREST_PROPERTY` | `Earns Interest` | Checkbox that enrols an account |
+| `SAVINGS_AER_PROPERTY` | `AER` | Number holding the AER as a percent |
+| `SAVINGS_PAYMENT_DAY_PROPERTY` | `Interest Payment Day` | Number: day of month interest is paid |
+| `SAVINGS_BALANCE_PROPERTY` | `Current Balance` | Number/formula interest accrues on |
+| `SAVINGS_ACCRUED_PROPERTY` | `Accrued Interest` | Number the bridge writes the running total to |
+| `SAVINGS_LAST_ACCRUED_PROPERTY` | `Last Accrued` | Date driving daily idempotency |
+| `SAVINGS_LAST_PAID_PROPERTY` | `Last Interest Paid` | Date guarding one payout per month |
+| `SAVINGS_INTEREST_NAME` | `Interest` | Title of the monthly interest transaction |
+| `SAVINGS_INTEREST_CATEGORY` | `Interest` | Category of the monthly interest transaction |
+
 ## PythonAnywhere deploy
 
 1. Clone the repo, create a virtualenv, `pip install -r requirements.txt`.
@@ -232,3 +324,13 @@ Set via environment variables (or a local `.env`):
 3. Set `API_SECRET` (in the WSGI file or a `.env`), then Reload.
 4. Confirm the pipe: `GET /health` returns 200, and `GET /health/auth` with the
    `X-API-Key` header returns 200.
+5. For savings interest, add a daily **Scheduled Task** (PythonAnywhere's Tasks
+   tab) that hits the endpoint with the API key — for example:
+
+   ```bash
+   curl -sS -X POST https://<you>.pythonanywhere.com/savings/accrue \
+     -H "X-API-Key: $API_SECRET"
+   ```
+
+   The pass must run daily so mid-month AER changes are captured at the right
+   rate; it is idempotent, so an extra run is harmless.
