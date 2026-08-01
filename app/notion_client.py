@@ -1,9 +1,10 @@
 """Thin Notion API wrapper (requests-based).
 
 Only the pieces the bridge needs: resolve a page id from its title
-(:meth:`NotionClient.query_by_name`), create a transaction page
+(:meth:`NotionClient.query_by_name`), read whole rows of a data source
+(:meth:`NotionClient.query_all`), create a transaction page
 (:meth:`NotionClient.create_page`), and patch an existing page
-(:meth:`NotionClient.update_page`, used from Phase 3). All calls target the
+(:meth:`NotionClient.update_page`). All calls target the
 2025-09-03 API, where pages are parented by ``data_source_id`` and lookup
 tables are queried at ``/v1/data_sources/{id}/query``.
 """
@@ -81,6 +82,26 @@ class NotionClient:
                     names.append(title)
             if not data.get("has_more"):
                 return names
+            cursor = data.get("next_cursor")
+
+    def query_all(self, data_source_id: str) -> list[dict]:
+        """Return every page in a data source as its full Notion dict.
+
+        Unlike :meth:`list_names`, callers get the raw page (including each
+        property's ``checkbox``/``number``/``date``/``formula`` value), so they
+        can read arbitrary columns. Pages through the whole table, mirroring the
+        pagination in :meth:`list_names`.
+        """
+        pages: list[dict] = []
+        cursor = None
+        while True:
+            payload: dict = {"page_size": 100}
+            if cursor:
+                payload["start_cursor"] = cursor
+            data = self._post(f"/data_sources/{data_source_id}/query", payload)
+            pages.extend(data.get("results", []))
+            if not data.get("has_more"):
+                return pages
             cursor = data.get("next_cursor")
 
     def list_accounts(
