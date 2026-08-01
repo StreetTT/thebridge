@@ -33,3 +33,30 @@ class Config:
     ACCOUNTS_DS_ID = os.environ.get("ACCOUNTS_DS_ID", "")
     CATEGORIES_DS_ID = os.environ.get("CATEGORIES_DS_ID", "")
     MONTHS_DS_ID = os.environ.get("MONTHS_DS_ID", "")
+
+    # Savings interest accrual. The property *names* are env-tunable so the
+    # Accounts schema can be renamed without touching code; their *values* live
+    # in Notion (the single source of truth for accrual state).
+    SAVINGS_EARNS_INTEREST_PROPERTY = os.environ.get(
+        "SAVINGS_EARNS_INTEREST_PROPERTY", "Earns Interest"
+    )
+    SAVINGS_AER_PROPERTY = os.environ.get("SAVINGS_AER_PROPERTY", "AER")
+    SAVINGS_PAYMENT_DAY_PROPERTY = os.environ.get(
+        "SAVINGS_PAYMENT_DAY_PROPERTY", "Interest Payment Day"
+    )
+    SAVINGS_BALANCE_PROPERTY = os.environ.get(
+        "SAVINGS_BALANCE_PROPERTY", "Current Balance"
+    )
+    SAVINGS_ACCRUED_PROPERTY = os.environ.get(
+        "SAVINGS_ACCRUED_PROPERTY", "Accrued Interest"
+    )
+    SAVINGS_LAST_ACCRUED_PROPERTY = os.environ.get(
+        "SAVINGS_LAST_ACCRUED_PROPERTY", "Last Accrued"
+    )
+    SAVINGS_LAST_PAID_PROPERTY = os.environ.get(
+        "SAVINGS_LAST_PAID_PROPERTY", "Last Interest Paid"
+    )
+
+    # Title + category applied to the monthly interest transaction.
+    SAVINGS_INTEREST_NAME = os.environ.get("SAVINGS_INTEREST_NAME", "Interest")
+    SAVINGS_INTEREST_CATEGORY = os.environ.get("SAVINGS_INTEREST_CATEGORY", "Interest")
