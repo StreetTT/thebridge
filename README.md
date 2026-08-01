@@ -29,17 +29,15 @@ flask_app.py                  # PythonAnywhere WSGI entry: exposes `application`
 app/__init__.py               # create_app() factory; registers blueprints
 app/config.py                 # env vars (NOTION_TOKEN, API_SECRET) + Notion data source IDs
 app/auth.py                   # require_api_key decorator (checks X-API-Key header)
-app/notion_client.py          # requests wrapper: query_by_name, list_names, create_page, update_page
+app/notion_client.py          # requests wrapper: query_by_name, list_names, list_accounts, create_page, update_page
 app/blueprints/health/        # GET /health (public), GET /health/auth (key-protected)
 app/blueprints/transactions/       # POST /transactions + /<id>/category (validate, resolve, write, learn)
 app/blueprints/transactions/merchant_memory.py  # JSON merchant -> category store
-app/data/card_accounts.example.json  # card label -> Accounts page id template
 app/data/merchant_categories.json    # learned merchant -> category counts (gitignored)
 ```
 
-Copy `app/data/card_accounts.example.json` to `app/data/card_accounts.json` and
-edit the mappings for your deployment. The real file is gitignored; the loader
-falls back to the example when it is absent.
+The `card` → account mapping lives entirely in **Notion** (see
+[Account links](#account-links)); there is no local mapping file.
 
 ## `POST /transactions`
 
@@ -64,11 +62,12 @@ Amount is parsed by ripping digits (so `"£12.50"` -> `12.5`) and signed by
 destination `To Account`). `datetime` falls back to now when missing or
 unparseable.
 
-Both accounts on a transfer come from `card_accounts.json`: `card` sets
-`From Account` and `to_account` sets `To Account`, each mapping a label to an
-account page id. So `to_account` must be a label present in that file (the same
-labels `card` accepts), not a Notion account title. An unknown `to_account`
-label is rejected with an error rather than silently left blank.
+Both accounts on a transfer are resolved from Notion (see
+[Account links](#account-links)): `card` sets `From Account` and `to_account`
+sets `To Account`. Each must match an account's codename or `Apple Card` value
+(case-insensitively) — `to_account` accepts the same labels `card` does. An
+unknown `card` or `to_account` is rejected with an error listing the known
+labels rather than silently left blank.
 
 The exact input payload is also written to a `rawPayload` rich-text property on
 the created page (JSON, truncated to Notion's 2000-char limit) for debugging and
@@ -89,6 +88,53 @@ response:
 ```
 
 Requires `NOTION_TOKEN` and the four `*_DS_ID` values to be configured.
+
+## Account links
+
+The `card` → account mapping lives in Notion, on the Accounts data source
+(`ACCOUNTS_DS_ID`). Each account row carries:
+
+- its **codename** — the page title, e.g. `Revolut Visa`; and
+- an **`Apple Card`** text (or select) property holding the exact card name
+  Apple hands over.
+
+To link a card, type the Apple-given name into the `Apple Card` property on the
+matching account row. Leave it blank for accounts only ever chosen manually —
+the codename still resolves.
+
+Accounts with the **`Archived`** checkbox ticked are skipped entirely (never
+resolved, never listed). The remaining accounts are returned in reverse of
+Notion's row order.
+
+The bridge reads the Accounts data source and resolves an incoming `card` (or
+transfer `to_account`) against **either** the codename **or** the `Apple Card`
+value, **exact + case-insensitive**. Both the manual picker's codenames and a
+tap's Apple card name share one keyspace, so the bridge never needs to know
+which entry point sent the value. The resolved map is cached in-process for an
+hour, so a newly edited link may take a short while to appear.
+
+`ACCOUNTS_DS_ID` is **required** — there is no local fallback. A request errors
+if it is unset, if Notion is unreachable with no cached map, or if `card` matches
+no codename or `Apple Card` value (the error lists the known labels). If two rows
+claim the same label (an `Apple Card` value colliding with another account's
+codename), the bridge refuses the map with an error so the clash is fixed in
+Notion rather than silently resolving to the wrong account.
+
+### `GET /accounts`
+
+Returns the account codenames so the shortcut can build its card picker from
+Notion instead of a hardcoded list.
+
+```bash
+curl -H "X-API-Key: <API_SECRET>" http://127.0.0.1:5000/accounts
+```
+
+```json
+{"accounts": ["NatWest Debit", "Revolut Visa", "ISave", "Pocket"]}
+```
+
+The list is drawn from Notion and cached like the resolver above. Errors use the
+same `{status, message}` shape.
 
 ## Merchant memory & categories
 

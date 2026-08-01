@@ -4,8 +4,9 @@
 against Notion, creates the page, and returns its id and url — flagging
 ``needs_category`` when the merchant's category is ambiguous or unknown.
 ``POST /transactions/<page_id>/category`` sets the chosen category afterwards.
-Errors use the ``{status, message}`` shape the Apple Shortcut treats as a
-failure.
+``GET /accounts`` returns the account codenames so the shortcut can build its
+card picker from Notion. Errors use the ``{status, message}`` shape the Apple
+Shortcut treats as a failure.
 """
 
 from flask import Blueprint, current_app, jsonify, request
@@ -13,6 +14,7 @@ from flask import Blueprint, current_app, jsonify, request
 from app.auth import require_api_key
 from app.blueprints.transactions.service import (
     TransactionError,
+    list_account_names,
     save_transaction,
     set_category,
 )
@@ -73,6 +75,21 @@ def create_transaction():
         body["warnings"] = result["warnings"]
     _echo_passthrough(raw, body, _PASSTHROUGH_KEYS_SUCCESS)
     return jsonify(**body), 201
+
+
+@transactions_bp.get("/accounts")
+@require_api_key
+def list_accounts():
+    """Return the account codenames so the shortcut can populate its picker.
+
+    Pulls the list from Notion (cached). Errors use the same ``{status,
+    message}`` shape the shortcut treats as a failure.
+    """
+    try:
+        accounts = list_account_names(current_app.config)
+    except (TransactionError, NotionError) as exc:
+        return jsonify(status=exc.code, message=str(exc)), exc.code
+    return jsonify(accounts=accounts), 200
 
 
 @transactions_bp.post("/transactions/<page_id>/category")

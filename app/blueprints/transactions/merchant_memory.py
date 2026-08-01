@@ -14,8 +14,8 @@ import json
 from pathlib import Path
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-# Runtime-mutated, so gitignored (like card_accounts.json). Missing file reads
-# as empty memory and is created on the first write.
+# Runtime-mutated, so gitignored. Missing file reads as empty memory and is
+# created on the first write.
 _MEMORY_PATH = _DATA_DIR / "merchant_categories.json"
 
 

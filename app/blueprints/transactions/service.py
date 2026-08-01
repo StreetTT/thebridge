@@ -11,7 +11,6 @@ import json
 import re
 import time
 from datetime import datetime
-from pathlib import Path
 
 from app.blueprints.transactions import merchant_memory
 from app.notion_client import NotionClient, NotionError
@@ -25,13 +24,6 @@ _LOOKUP_TARGETS = {
     "Month": ("Month", "MONTHS_DS_ID"),
 }
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-# Real mapping is gitignored; fall back to the committed example so a fresh
-# checkout still runs. Copy card_accounts.example.json -> card_accounts.json
-# to customise per deployment.
-_CARD_ACCOUNTS_PATH = _DATA_DIR / "card_accounts.json"
-_CARD_ACCOUNTS_EXAMPLE_PATH = _DATA_DIR / "card_accounts.example.json"
-
 
 class TransactionError(Exception):
     """A validation error carrying the HTTP status the client should see.
@@ -43,23 +35,6 @@ class TransactionError(Exception):
     def __init__(self, message: str, code: int = 400):
         super().__init__(message)
         self.code = code
-
-
-def _load_card_accounts() -> dict:
-    """Load the card-label -> account-page-id map from disk.
-
-    Prefers the gitignored ``card_accounts.json`` and falls back to the
-    committed ``card_accounts.example.json``. Read on each request so edits take
-    effect without a reload; the file is tiny so this is cheap.
-    """
-    path = _CARD_ACCOUNTS_PATH if _CARD_ACCOUNTS_PATH.exists() else _CARD_ACCOUNTS_EXAMPLE_PATH
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise TransactionError(
-            f"Could not read {path.name}: {exc}", code=500
-        ) from exc
 
 
 def parse_amount(raw_amount) -> float:
@@ -116,12 +91,14 @@ def _sign_and_role(amount: float, txn_type: str) -> tuple[float, str]:
     return -amount, "From Account"
 
 
-def build_transaction(raw: dict, config) -> dict:
+def build_transaction(raw: dict, config, card_accounts: dict) -> dict:
     """Digest a raw transaction dict into a computed Notion payload (no write).
 
-    Returns a structure with the parsed fields, the ``notion_payload`` we can
-    build now (parent + properties whose ids are already known), and
-    ``pending_lookups`` for name-based relations Phase 2 will resolve.
+    ``card_accounts`` is the already-resolved lowercased ``label -> page id`` map
+    (see :func:`_resolve_card_accounts`), so this stays Notion-free. Returns a
+    structure with the parsed fields, the ``notion_payload`` we can build now
+    (parent + properties whose ids are already known), and ``pending_lookups``
+    for name-based relations.
     """
     txn_type = (raw.get("type") or "expense").strip().lower()
     if txn_type not in VALID_TYPES:
@@ -133,8 +110,7 @@ def build_transaction(raw: dict, config) -> dict:
     if not card:
         raise TransactionError("card is required")
 
-    card_accounts = _load_card_accounts()
-    account_page_id = card_accounts.get(card)
+    account_page_id = card_accounts.get(card.strip().lower())
     if not account_page_id:
         known = ", ".join(sorted(card_accounts)) or "none configured"
         raise TransactionError(
@@ -164,7 +140,7 @@ def build_transaction(raw: dict, config) -> dict:
     # A transfer also credits a destination account. Resolve it from the same
     # card_accounts label -> page-id map as the source so both ends link reliably
     if txn_type == "transfer" and to_account_name:
-        to_account_page_id = card_accounts.get(to_account_name)
+        to_account_page_id = card_accounts.get(to_account_name.strip().lower())
         if not to_account_page_id:
             known = ", ".join(sorted(card_accounts)) or "none configured"
             raise TransactionError(
@@ -252,6 +228,89 @@ def _all_category_names(client: NotionClient, config) -> tuple[list[str], str | 
     return list(names), None
 
 
+_ALIAS_PROPERTY = "Apple Card"
+_ARCHIVED_PROPERTY = "Archived"
+_ACCOUNTS_CACHE_TTL = 3600  # seconds
+_accounts_cache: dict = {"ds": None, "map": None, "codenames": None, "expires": 0.0}
+
+
+def _resolve_card_accounts(client: NotionClient, config) -> tuple[dict, list[str]]:
+    """Return ``(card_map, codenames)`` for resolving an incoming card.
+
+    ``card_map`` maps a lowercased label to an account page id, keyed by both the
+    account's codename (page title) and its non-empty ``Apple Card`` alias, so a
+    ``card`` matches either case-insensitively — the manual picker sends a
+    codename, an Apple Pay tap sends the card name, and both land in the same
+    keyspace. ``codenames`` are the account titles for the shortcut's picker, in
+    reverse of Notion's order; archived accounts (the ``Archived`` checkbox
+    ticked) are excluded.
+
+    Notion is the sole source of truth, cached per :data:`_ACCOUNTS_CACHE_TTL`.
+    When two rows claim the same label (an alias colliding with another account's
+    codename, say), the later row in Notion's order wins the key; the collision
+    is not silently ignored — it raises so the ambiguity gets fixed in Notion.
+    Raises :class:`TransactionError` when ``ACCOUNTS_DS_ID`` is unset; a Notion
+    query failure with no usable fresh cache propagates as
+    :class:`~app.notion_client.NotionError`.
+    """
+    data_source_id = config.get("ACCOUNTS_DS_ID")
+    if not data_source_id:
+        raise TransactionError("Server has no ACCOUNTS_DS_ID configured", code=500)
+
+    now = time.monotonic()
+    fresh = (
+        _accounts_cache["ds"] == data_source_id
+        and _accounts_cache["map"] is not None
+        and now < _accounts_cache["expires"]
+    )
+    if fresh:
+        return dict(_accounts_cache["map"]), list(_accounts_cache["codenames"])
+
+    try:
+        accounts = client.list_accounts(data_source_id, _ALIAS_PROPERTY, _ARCHIVED_PROPERTY)
+    except NotionError:
+        # Serve a stale map if we have one; otherwise let the caller see the error
+        # rather than guessing an account.
+        if _accounts_cache["ds"] == data_source_id and _accounts_cache["map"] is not None:
+            return dict(_accounts_cache["map"]), list(_accounts_cache["codenames"])
+        raise
+
+    card_map: dict = {}
+    codenames: list[str] = []
+    for account in accounts:
+        page_id = account["id"]
+        codename = account["codename"]
+        codenames.append(codename)
+        for label in (codename, account.get("apple_card")):
+            if not label:
+                continue
+            key = label.lower()
+            existing = card_map.get(key)
+            if existing and existing != page_id:
+                raise TransactionError(
+                    f"Account label {label!r} maps to two different accounts in "
+                    "Notion; make each codename and Apple Card value unique.",
+                    code=500,
+                )
+            card_map[key] = page_id
+
+    _accounts_cache.update(
+        ds=data_source_id, map=card_map, codenames=codenames, expires=now + _ACCOUNTS_CACHE_TTL
+    )
+    return dict(card_map), list(codenames)
+
+
+def list_account_names(config) -> list[str]:
+    """Return the account codenames for the shortcut's picker (cached resolver).
+
+    Creates its own client and reuses :func:`_resolve_card_accounts`, so the list
+    comes straight from Notion with the same caching behaviour.
+    """
+    client = NotionClient(config.get("NOTION_TOKEN"), config.get("NOTION_VERSION"))
+    _card_map, codenames = _resolve_card_accounts(client, config)
+    return codenames
+
+
 def save_transaction(raw: dict, config) -> dict:
     """Digest ``raw``, resolve its name-based relations, and create the page.
 
@@ -276,13 +335,18 @@ def save_transaction(raw: dict, config) -> dict:
     :class:`~app.notion_client.NotionError` only when the page create itself
     fails.
     """
-    digested = build_transaction(raw, config)
-    payload = digested["notion_payload"]
-    properties = payload["properties"]
     merchant = raw.get("merchant") or ""
 
     client = NotionClient(config.get("NOTION_TOKEN"), config.get("NOTION_VERSION"))
     warnings: list[str] = []
+
+    # Resolve the card -> account map from Notion, so build_transaction 
+    # stays Notion-free.
+    card_accounts, _codenames = _resolve_card_accounts(client, config)
+
+    digested = build_transaction(raw, config, card_accounts)
+    payload = digested["notion_payload"]
+    properties = payload["properties"]
 
     # Decide the category: explicit input wins, otherwise consult memory.
     category_to_learn = digested["parsed"]["category_name"]

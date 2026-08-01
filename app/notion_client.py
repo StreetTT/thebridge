@@ -83,6 +83,39 @@ class NotionClient:
                 return names
             cursor = data.get("next_cursor")
 
+    def list_accounts(
+        self, data_source_id: str, alias_property: str, archived_property: str
+    ) -> list[dict]:
+        """Return each account row as ``{"id", "codename", "apple_card"}``.
+
+        ``codename`` is the page title; ``apple_card`` is the plain-text value of
+        ``alias_property`` (the exact name Apple hands over), empty when unset.
+        Rows without a title, or rows whose ``archived_property`` checkbox is
+        ticked, are skipped. Results are returned in reverse of Notion's query
+        order (newest-defined accounts last become first). Pages through the
+        whole (small) table, mirroring :meth:`list_names`.
+        """
+        accounts: list[dict] = []
+        cursor = None
+        while True:
+            payload: dict = {"page_size": 100}
+            if cursor:
+                payload["start_cursor"] = cursor
+            data = self._post(f"/data_sources/{data_source_id}/query", payload)
+            for page in data.get("results", []):
+                codename = _page_title(page).strip()
+                if not codename or _page_checkbox(page, archived_property):
+                    continue
+                accounts.append({
+                    "id": page.get("id"),
+                    "codename": codename,
+                    "apple_card": _page_property_text(page, alias_property).strip(),
+                })
+            if not data.get("has_more"):
+                accounts.reverse()
+                return accounts
+            cursor = data.get("next_cursor")
+
     def create_page(self, payload: dict) -> tuple[str | None, str | None]:
         """Create a page and return ``(page_id, url)`` from the response."""
         data = self._post("/pages", payload)
@@ -127,3 +160,29 @@ def _page_title(page: dict) -> str:
         if prop.get("type") == "title":
             return "".join(part.get("plain_text", "") for part in prop.get("title", []))
     return ""
+
+
+def _page_property_text(page: dict, name: str) -> str:
+    """Return the plain-text value of a named property, or ``""`` if absent.
+
+    Handles the property shapes an alias might use: ``rich_text`` and ``title``
+    concatenate their parts' ``plain_text``; ``select`` yields its option name.
+    """
+    prop = page.get("properties", {}).get(name)
+    if not prop:
+        return ""
+    prop_type = prop.get("type")
+    if prop_type in ("rich_text", "title"):
+        return "".join(part.get("plain_text", "") for part in prop.get(prop_type, []))
+    if prop_type == "select":
+        select = prop.get("select") or {}
+        return select.get("name", "")
+    return ""
+
+
+def _page_checkbox(page: dict, name: str) -> bool:
+    """Return a named checkbox property's value, or ``False`` if absent."""
+    prop = page.get("properties", {}).get(name)
+    if not prop or prop.get("type") != "checkbox":
+        return False
+    return bool(prop.get("checkbox"))
