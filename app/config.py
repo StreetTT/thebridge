@@ -60,3 +60,8 @@ class Config:
     # Title + category applied to the monthly interest transaction.
     SAVINGS_INTEREST_NAME = os.environ.get("SAVINGS_INTEREST_NAME", "Interest")
     SAVINGS_INTEREST_CATEGORY = os.environ.get("SAVINGS_INTEREST_CATEGORY", "Interest")
+
+    # Observability. LOG_LEVEL defaults to INFO; set DEBUG on PA when tracing one
+    # transaction `_id` or a savings accrue day. Sentry is off unless DSN is set.
+    LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+    SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
