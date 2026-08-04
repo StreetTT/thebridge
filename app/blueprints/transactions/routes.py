@@ -9,6 +9,8 @@ card picker from Notion. Errors use the ``{status, message}`` shape the Apple
 Shortcut treats as a failure.
 """
 
+import logging
+
 from flask import Blueprint, current_app, jsonify, request
 
 from app.auth import require_api_key
@@ -21,6 +23,7 @@ from app.blueprints.transactions.service import (
 from app.notion_client import NotionError
 
 transactions_bp = Blueprint("transactions", __name__)
+_log = logging.getLogger(__name__)
 
 
 # `_id` is echoed on every response (success and error) for request/response
@@ -44,6 +47,21 @@ def _echo_passthrough(raw, body, keys):
             body[key] = raw[key]
 
 
+def _has_client_id(raw) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    client_id = raw.get("_id")
+    return client_id is not None and bool(str(client_id).strip())
+
+
+def _log_domain_error(exc: Exception, context: str) -> None:
+    code = getattr(exc, "code", 500)
+    if code >= 500:
+        _log.error("%s failed: %s", context, exc)
+    else:
+        _log.warning("%s failed: %s", context, exc)
+
+
 @transactions_bp.post("/transactions")
 @require_api_key
 def create_transaction():
@@ -52,9 +70,13 @@ def create_transaction():
     if not isinstance(raw, dict):
         return jsonify(status=400, message="Request body must be a JSON object"), 400
 
+    if not _has_client_id(raw):
+        _log.warning("Transaction create missing body _id; logs will show id=-")
+
     try:
         result = save_transaction(raw, current_app.config)
     except (TransactionError, NotionError) as exc:
+        _log_domain_error(exc, "Transaction create")
         error = {"status": exc.code, "message": str(exc)}
         _echo_passthrough(raw, error, _PASSTHROUGH_KEYS)
         return jsonify(**error), exc.code
@@ -88,6 +110,7 @@ def list_accounts():
     try:
         accounts = list_account_names(current_app.config)
     except (TransactionError, NotionError) as exc:
+        _log_domain_error(exc, "List accounts")
         return jsonify(status=exc.code, message=str(exc)), exc.code
     return jsonify(accounts=accounts), 200
 
@@ -97,9 +120,18 @@ def list_accounts():
 def set_transaction_category(page_id):
     """Set the category the shortcut picked after an ambiguous/unknown create."""
     body = request.get_json(silent=True)
+    if not _has_client_id(body):
+        _log.warning(
+            "Category update missing body _id; notion_page_id=%s; logs will show id=-",
+            page_id,
+        )
+    else:
+        _log.debug("Category update notion_page_id=%s", page_id)
+
     try:
         result = set_category(page_id, body, current_app.config)
     except (TransactionError, NotionError) as exc:
+        _log_domain_error(exc, "Category update")
         error = {"status": exc.code, "message": str(exc)}
         _echo_passthrough(body, error, _PASSTHROUGH_KEYS)
         return jsonify(**error), exc.code

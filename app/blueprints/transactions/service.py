@@ -8,12 +8,15 @@ Notion, writes the page, and returns its id and url.
 """
 
 import json
+import logging
 import re
 import time
 from datetime import datetime
 
 from app.blueprints.transactions import merchant_memory
 from app.notion_client import NotionClient, NotionError
+
+_log = logging.getLogger(__name__)
 
 VALID_TYPES = ("expense", "income", "transfer")
 
@@ -222,13 +225,16 @@ def _all_category_names(client: NotionClient, config) -> tuple[list[str], str | 
         and now < _category_cache["expires"]
     )
     if fresh:
+        _log.debug("Category list cache hit (%d names)", len(_category_cache["names"]))
         return list(_category_cache["names"]), None
 
+    _log.debug("Category list cache miss; querying Notion")
     try:
         names = client.list_names(data_source_id)
     except NotionError as exc:
         # Serve a stale list if we have one; only report unavailable otherwise.
         if _category_cache["ds"] == data_source_id and _category_cache["names"] is not None:
+            _log.debug("Category list using stale cache after Notion error")
             return list(_category_cache["names"]), None
         return [], f"Could not list categories ({exc}); all_categories unavailable."
 
@@ -272,14 +278,17 @@ def _resolve_card_accounts(client: NotionClient, config) -> tuple[dict, list[str
         and now < _accounts_cache["expires"]
     )
     if fresh:
+        _log.debug("Accounts cache hit (%d labels)", len(_accounts_cache["map"]))
         return dict(_accounts_cache["map"]), list(_accounts_cache["codenames"])
 
+    _log.debug("Accounts cache miss; querying Notion")
     try:
         accounts = client.list_accounts(data_source_id, _ALIAS_PROPERTY, _ARCHIVED_PROPERTY)
     except NotionError:
         # Serve a stale map if we have one; otherwise let the caller see the error
         # rather than guessing an account.
         if _accounts_cache["ds"] == data_source_id and _accounts_cache["map"] is not None:
+            _log.debug("Accounts using stale cache after Notion error")
             return dict(_accounts_cache["map"]), list(_accounts_cache["codenames"])
         raise
 
@@ -355,9 +364,16 @@ def save_transaction(raw: dict, config) -> dict:
     digested = build_transaction(raw, config, card_accounts)
     payload = digested["notion_payload"]
     properties = payload["properties"]
+    parsed = digested["parsed"]
+    _log.debug(
+        "Built transaction type=%s merchant=%r amount=%s",
+        digested["type"],
+        merchant,
+        parsed["amount"],
+    )
 
     # Decide the category: explicit input wins, otherwise consult memory.
-    category_to_learn = digested["parsed"]["category_name"]
+    category_to_learn = parsed["category_name"]
     needs_category = False
     candidates: list[str] = []
     if not category_to_learn:
@@ -365,9 +381,14 @@ def save_transaction(raw: dict, config) -> dict:
         if len(known) == 1:
             digested["pending_lookups"]["Category"] = known[0]
             category_to_learn = known[0]
+            _log.debug("Merchant memory auto-fill category=%r", category_to_learn)
         else:
             needs_category = True
             candidates = known  # empty when unknown, ordered when ambiguous
+            _log.debug(
+                "Merchant memory needs_category candidates=%d",
+                len(candidates),
+            )
 
     # Always offer the full list so the pick can be changed later, even after an
     # auto-fill or an explicit category.
@@ -388,14 +409,26 @@ def save_transaction(raw: dict, config) -> dict:
             continue
         if page_id:
             properties[prop_name] = {"relation": [{"id": page_id}]}
+            _log.debug("Resolved %s %r -> %s", field, name, page_id)
         else:
             warnings.append(f"No {field} match for {name!r}; left blank.")
+
+    for warning in warnings:
+        _log.warning("%s", warning)
 
     page_id, public_url = client.create_page(payload)
 
     # Only learn once the page exists, and only when a category was applied.
     if category_to_learn:
         merchant_memory.record(merchant, category_to_learn)
+
+    _log.info(
+        "created page_id=%s merchant=%r category=%r needs_category=%s",
+        page_id,
+        merchant,
+        category_to_learn,
+        needs_category,
+    )
 
     return {
         "page_id": page_id,
@@ -430,12 +463,19 @@ def set_category(page_id: str, body, config) -> dict:
         raise TransactionError("Server has no CATEGORIES_DS_ID configured", code=500)
 
     client = NotionClient(config.get("NOTION_TOKEN"), config.get("NOTION_VERSION"))
+    _log.debug("Resolving category %r for page_id=%s", category, page_id)
     category_page_id = client.query_by_name(data_source_id, category)
     if not category_page_id:
         raise TransactionError(f"No Category match for {category!r}", code=404)
 
     updated = client.update_page(page_id, {"Category": {"relation": [{"id": category_page_id}]}})
     merchant_memory.record(merchant, category)
+    _log.info(
+        "category set page_id=%s category=%r merchant=%r",
+        page_id,
+        category,
+        merchant,
+    )
     return {
         "page_id": page_id,
         "public_url": updated.get("url"),

@@ -11,12 +11,14 @@ used first) so the caller can prompt; none leaves the pick to the caller.
 """
 
 import json
+import logging
 from pathlib import Path
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 # Runtime-mutated, so gitignored. Missing file reads as empty memory and is
 # created on the first write.
 _MEMORY_PATH = _DATA_DIR / "merchant_categories.json"
+_log = logging.getLogger(__name__)
 
 
 def _key(merchant: str | None) -> str:
@@ -28,7 +30,10 @@ def load() -> dict:
     try:
         with open(_MEMORY_PATH, encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        _log.error("Failed to load merchant memory from %s: %s", _MEMORY_PATH, exc)
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -56,8 +61,12 @@ def record(merchant: str | None, category: str | None) -> None:
 
 def _save(memory: dict) -> None:
     """Write memory to disk, replacing the file atomically to avoid corruption."""
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = _MEMORY_PATH.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(memory, f, indent=2, ensure_ascii=False)
-    tmp.replace(_MEMORY_PATH)
+    try:
+        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _MEMORY_PATH.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(memory, f, indent=2, ensure_ascii=False)
+        tmp.replace(_MEMORY_PATH)
+    except OSError as exc:
+        _log.error("Failed to save merchant memory to %s: %s", _MEMORY_PATH, exc)
+

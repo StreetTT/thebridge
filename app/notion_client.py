@@ -9,11 +9,15 @@ Only the pieces the bridge needs: resolve a page id from its title
 tables are queried at ``/v1/data_sources/{id}/query``.
 """
 
+import logging
+import time
+
 import requests
 
 _API_ROOT = "https://api.notion.com/v1"
 # PythonAnywhere's free tier is slow to reach out; give Notion room to answer.
 _TIMEOUT = 15
+_log = logging.getLogger(__name__)
 
 
 class NotionError(Exception):
@@ -153,6 +157,7 @@ class NotionClient:
         return self._request("patch", path, payload)
 
     def _request(self, method: str, path: str, payload: dict) -> dict:
+        started = time.perf_counter()
         try:
             resp = requests.request(
                 method,
@@ -162,8 +167,10 @@ class NotionClient:
                 timeout=_TIMEOUT,
             )
         except requests.RequestException as exc:
+            _log.error("Notion %s %s network failure: %s", method.upper(), path, exc)
             raise NotionError(f"Could not reach Notion: {exc}") from exc
 
+        latency_ms = (time.perf_counter() - started) * 1000
         try:
             data = resp.json()
         except ValueError:
@@ -171,7 +178,23 @@ class NotionClient:
 
         if resp.status_code >= 400:
             message = data.get("message") or resp.text or "request failed"
+            _log.error(
+                "Notion %s %s failed status=%s latency_ms=%.1f: %s",
+                method.upper(),
+                path,
+                resp.status_code,
+                latency_ms,
+                message,
+            )
             raise NotionError(f"Notion error: {message}", code=502)
+
+        _log.debug(
+            "Notion %s %s ok status=%s latency_ms=%.1f",
+            method.upper(),
+            path,
+            resp.status_code,
+            latency_ms,
+        )
         return data
 
 
