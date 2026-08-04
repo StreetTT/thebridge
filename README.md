@@ -31,8 +31,10 @@ so future phone-to-Notion projects can add endpoints without touching existing o
 
 ```
 flask_app.py                  # PythonAnywhere WSGI entry: exposes `application`
-app/__init__.py               # create_app() factory; registers blueprints
+app/__init__.py               # create_app() factory; logging hooks + blueprints
 app/config.py                 # env vars (NOTION_TOKEN, API_SECRET) + Notion data source IDs
+app/logging_setup.py          # log format + client_id filter (body `_id` / accrue run id)
+app/sentry_setup.py           # optional Sentry init when SENTRY_DSN is set
 app/auth.py                   # require_api_key decorator (checks X-API-Key header)
 app/notion_client.py          # requests wrapper: query_by_name, list_names, query_all, list_accounts, create_page, update_page
 app/blueprints/health/        # GET /health (public), GET /health/auth (key-protected)
@@ -302,6 +304,8 @@ Set via environment variables (or a local `.env`):
 | `NOTION_TOKEN` | yes | Notion internal integration token |
 | `API_SECRET` | yes | Shared secret sent in the `X-API-Key` header |
 | `TRANSACTIONS_DS_ID` / `ACCOUNTS_DS_ID` / `CATEGORIES_DS_ID` / `MONTHS_DS_ID` | yes | Set the Notion data source IDs |
+| `LOG_LEVEL` | no | Root log level (`INFO` default; `DEBUG` for a full step trail) |
+| `SENTRY_DSN` | no | When set, hard failures are sent to Sentry (tagged with `client_id`) |
 
 Savings interest is configured entirely by optional env vars (defaults shown),
 so the Accounts schema can be renamed and the payout labels tuned without code
@@ -337,3 +341,46 @@ changes:
 
    The pass must run daily so mid-month AER changes are captured at the right
    rate; it is idempotent, so an extra run is harmless.
+
+## Logging & Sentry
+
+Every log line is shaped as:
+
+```text
+2026-08-04 10:15:01 INFO [app.transactions] [id=<client_id>] message
+```
+
+Correlation uses the client `_id` for transactions and a per-run id for savings.
+Nothing invents a UUID when `_id` is missing — those lines show `id=-`.
+
+### Transaction trail
+
+1. Take `_id` from the Shortcut response (or the Notion `_id` column).
+2. Open the PythonAnywhere **Error log** (Web → Log files).
+3. Search for `id=<uuid>` — create, category follow-up, Notion latency, and
+   soft warnings for that transaction share the same tag.
+
+Create success also logs Notion `page_id` so you can join Shortcut `_id` ↔ page.
+
+### Savings trail
+
+Each `POST /savings/accrue` binds `id=accrue-YYYY-MM-DD-xxxx` (four random hex
+chars per run). Search:
+
+- `id=accrue-2026-08-04` — every run that day
+- `id=accrue-2026-08-04-a3f9` — one run
+- `id=interest-<accountPageId>-2026-08-<same-suffix>` — a monthly payout and its
+  nested transaction logs
+
+### DEBUG tip
+
+Default production level is `INFO`. Set `LOG_LEVEL=DEBUG` in the PA env (or
+`.env`), Reload the web app, reproduce one `_id` or one accrue day, then set it
+back to `INFO`. DEBUG adds cache hit/miss, relation resolve, and per-account
+accrue/skip/pay decisions.
+
+### Sentry
+
+Set `SENTRY_DSN` to enable remote error capture (`send_default_pii=False`;
+secrets are scrubbed). Filter the Sentry tag `client_id` the same way you grep
+the PA Error log. Leave `SENTRY_DSN` blank locally unless you want events sent.
