@@ -7,15 +7,15 @@ so future phone-to-Notion projects can add endpoints without touching existing o
 ## Status
 
 - **Phase 0 (Foundation) — done:** app factory + blueprints, `config.py`,
-  `require_api_key` auth, `GET /health`. Deployable to PythonAnywhere.
+`require_api_key` auth, `GET /health`. Deployable to PythonAnywhere.
 - **Phase 1 (Digestion) — done:** `POST /transactions` validates the raw dict,
-  signs the amount, maps `card` -> account page id, and resolves `Date` +
-  `Month` from `datetime`.
+signs the amount, maps `card` -> account page id, and resolves `Date` +
+`Month` from `datetime`.
 - **Phase 2 (Saving) — done:** `POST /transactions` now writes to Notion. It
-  resolves the name-based relations (`Category`, `Month`, transfer
-  `To Account`) via `notion_client`, creates the page, and
-  returns `201 {"page_id", "public_url"}`. A supplied name that has no matching
-  row is skipped (never blocks the write) and reported under `warnings`.
+resolves the name-based relations (`Category`, `Month`, transfer
+`To Account`) via `notion_client`, creates the page, and
+returns `201 {"page_id", "public_url"}`. A supplied name that has no matching
+row is skipped (never blocks the write) and reported under `warnings`.
 - **Phase 3 (Memory) — done:** a JSON store remembers which categories each
   merchant has been filed under (learned only from bridge posts, never by
   reading Notion). One known category auto-fills; an ambiguous or unknown
@@ -105,14 +105,14 @@ The `card` → account mapping lives in Notion, on the Accounts data source
 (`ACCOUNTS_DS_ID`). Each account row carries:
 
 - its **codename** — the page title, e.g. `Revolut Visa`; and
-- an **`Apple Card`** text (or select) property holding the exact card name
-  Apple hands over.
+- an `Apple Card` text (or select) property holding the exact card name
+Apple hands over.
 
 To link a card, type the Apple-given name into the `Apple Card` property on the
 matching account row. Leave it blank for accounts only ever chosen manually —
 the codename still resolves.
 
-Accounts with the **`Archived`** checkbox ticked are skipped entirely (never
+Accounts with the `Archived` checkbox ticked are skipped entirely (never
 resolved, never listed). The remaining accounts are returned in reverse of
 Notion's row order.
 
@@ -155,8 +155,8 @@ posts — it never reads the Notion table):
 
 - **One known category** → auto-filled; the write proceeds as normal.
 - **Two or more (ambiguous)** or **none (unknown merchant)** → the row is created
-  uncategorised and the response adds `needs_category`, so the shortcut prompts
-  and confirms the pick.
+uncategorised and the response adds `needs_category`, so the shortcut prompts
+and confirms the pick.
 
 Every success response also carries `category` (the category actually applied,
 or `null`) and `all_categories` (every category in Notion). This means the
@@ -484,7 +484,7 @@ changes:
 
 1. Clone the repo, create a virtualenv, `pip install -r requirements.txt`.
 2. Create a manual-config Flask web app; point its WSGI file at `application`
-   from `flask_app.py`.
+  from `flask_app.py`.
 3. Set `API_SECRET` (in the WSGI file or a `.env`), then Reload.
 4. Confirm the pipe: `GET /health` returns 200, and `GET /health/auth` with the
    `X-API-Key` header returns 200.
