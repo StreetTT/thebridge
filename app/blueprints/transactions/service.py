@@ -152,6 +152,14 @@ def build_transaction(raw: dict, config, card_accounts: dict) -> dict:
     if notes:
         properties["Notes"] = {"rich_text": [{"text": {"content": notes}}]}
 
+    # Client correlation id (also echoed on the HTTP response). Written when
+    # present so the Notion row can be matched back to the originating request.
+    client_id = raw.get("_id")
+    if client_id is not None and str(client_id).strip():
+        properties["_id"] = {
+            "rich_text": [{"text": {"content": str(client_id).strip()}}]
+        }
+
     # Store the exact input for debugging/audit. Notion caps a single rich_text
     # chunk at 2000 chars, so truncate the (normally tiny) payload to stay valid.
     raw_json = json.dumps(raw, ensure_ascii=False, sort_keys=True)[:2000]

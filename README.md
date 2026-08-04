@@ -77,8 +77,10 @@ labels rather than silently left blank.
 
 The exact input payload is also written to a `rawPayload` rich-text property on
 the created page (JSON, truncated to Notion's 2000-char limit) for debugging and
-audit. Add a `rawPayload` text column to the Transactions data source to capture
-it.
+audit. When the request includes an `_id`, that value is written to an `_id`
+rich-text property on the page as well (for correlating the Notion row with the
+originating request). Add `rawPayload` and `_id` text columns to the
+Transactions data source to capture them.
 
 Name-based relations are resolved by looking up the matching row in Notion:
 `category` -> the `Category` property and the derived month -> `Month`.
@@ -178,8 +180,9 @@ affordance).
 
 If the request body includes an `_id` key, it is echoed back verbatim on the
 response (both success and error) so the caller can correlate a response with
-the request it sent. An `interactive` key is echoed the same way but only on
-success responses. This applies to both transaction endpoints.
+the request it sent. On a successful create it is also stored on the Notion
+page's `_id` property. An `interactive` key is echoed the same way but only on
+success responses. Passthrough echo applies to both transaction endpoints.
 
 ## `POST /transactions/<page_id>/category`
 
