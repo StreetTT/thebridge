@@ -275,6 +275,163 @@ endpoints.
 The first payout after enabling covers only the days accrued so far that month
 (a partial month), which is expected.
 
+## The Apple Shortcut
+
+The client is a set of small, single-purpose shortcuts rather than one monolith,
+so each pathway stays readable and the network/category/offline logic lives in
+one place. The two entry points (`Log (Tap)`, `Log (Manual)`) build a raw dict
+and hand it to `POST Transaction`, which does the actual send and delegates the
+category pick to `Update Category`. Alongside the logging suite, a standalone
+`Interest Manager` drives the savings accrual endpoint on a schedule.
+
+The suite needs the **Actions** app on the phone. It owns both:
+
+- **Global text variables** — the offline queue (`queueKey`) and the accounts
+  cache (`accountsCacheKey`).
+- **Rich notifications** — threaded by `_id`, Notion URL on tap, notification
+  action buttons. Titles look like
+  `Transaction <_id> (PLEASE READ THE ACTION DESCRIPTION)`; the real body lives
+  in the action description (subtitle / category / failure detail).
+
+Shared shortcut variables: `baseURL` (the bridge host) and `apiKey` (sent as
+`X-API-Key`).
+
+
+| Shortcut           | Role                                                                                                                                                                                                                                            | Get it                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `Log (Tap)`        | NFC-automation entry point fired by a card tap. Builds the raw dict from its `Shortcut Input` (`merchant`, `card`, `amount`), asks for the `description`, then runs `POST Transaction`. Falls back to `Log (Manual)` when it receives no input. | *paste iCloud link here* |
+| `Log (Manual)`     | Hand-logging entry point. Refreshes the accounts cache from `GET /accounts` when online, picks a card from the cache, then prompts for `description`, `amount`, `type` (and `to_account` for transfers), and optional `notes`, then runs `POST Transaction`. | *paste iCloud link here* |
+| `POST Transaction` | Shared core: ensures an `_id`, parks the dict in the Actions queue, POSTs to `/transactions` when online, and branches on the response — fail, `needs_category`, or success — then dequeues on a successful reply.                              | *paste iCloud link here* |
+| `Update Category`  | Reusable picker: lists `all_categories`, POSTs the choice to `/transactions/<page_id>/category`, and reports success or failure. Called on a `needs_category` reply and from the success "Change Category" menu.                                  | *paste iCloud link here* |
+| `Flush Queue`      | Standalone + automation: replays each queued transaction through `POST Transaction` with `interactive` off; successful replays dequeue themselves inside `POST Transaction`.                                                                   | *paste iCloud link here* |
+| `Interest Manager` | Standalone + automation: POSTs to `/savings/accrue` to run the daily savings-interest accrual (and monthly payout), then surfaces any `warnings` the bridge returns. Meant to run unattended on a daily schedule.                                | *paste iCloud link here* |
+
+
+Both entry points seed the same base fields — `address` (from Current Location),
+`datetime` (Current Date), and `interactive: true` — so `POST Transaction`
+behaves identically whichever pathway called it. `description` is the row's
+title. `merchant` is optional: it never becomes the title, it only feeds the
+bridge's merchant-memory so a category can be learned and auto-filled.
+`Log (Tap)` passes through whatever `merchant` / `card` / `amount` the tap
+supplied; `Log (Manual)` picks `card` from the accounts cache and omits
+`merchant`, so its title comes purely from `description`.
+
+### Entry points
+
+`Log (Tap)` first checks its `Shortcut Input`: with nothing to log it runs
+`Log (Manual)` and stops, otherwise it seeds `merchant` / `card` / `amount` from
+the input, adds location and date, asks for the `description`, and rips the
+digits out of `amount` (`Match [0-9.]+` → first match → number) so currency
+symbols from Apple Wallet still post clean. It then runs `POST Transaction`.
+
+`Log (Manual)` has no tag to read. When Wi-Fi or cellular is available it
+refreshes `accountsCacheKey` from `GET /accounts` (no hardcoded mapping); the
+card picker always reads that cache (so a recent list still works offline). It
+then walks through `description`, `amount` (asked as a Number — no digit
+ripping), `type` (Expense / Transfer / Income), a transfer's `to_account`
+(reusing the same accounts list), and an optional **Any Notes?** prompt before
+handing the dict to `POST Transaction`.
+
+### `POST Transaction` (shared core)
+
+1. **Idempotency** — if the dict has no `_id`, generate a UUID and set it.
+   Replays from `Flush Queue` keep their existing `_id`.
+2. **Enqueue** — park the dict in Actions under `queueKey` (a dictionary keyed
+   by `_id`) *before* any network call.
+3. **Connectivity** — if there is no Wi-Fi SSID and cellular data is off, show a
+   failure notification and stop. The entry stays queued.
+4. **POST** — send the dict as the body to `POST /transactions` with
+   `X-API-Key` + `Content-Type: application/json`.
+5. **Branch on the reply** (keys checked in order):
+   - **`status` present** → failure notification (entry stays queued for a later
+     flush, unless you clear it by hand).
+   - **no `status`** → success path: build a notification (Notion `public_url`
+     on tap, threaded by `_id`), **dequeue** the `_id` from `queueKey`, then:
+     - **`needs_category` + interactive** → run `Update Category` and stop.
+     - **`needs_category` + non-interactive** → leave the computed category;
+       stop.
+     - **plain success + interactive** → notify, then **Exit / Change Category**.
+     - **plain success + non-interactive** → notify and stop.
+
+### Category prompt
+
+`POST Transaction` never shows the category picker itself; it delegates to
+`Update Category`, which lists the full `all_categories` from the response, POSTs
+`{"category": ...}` to `POST /transactions/<page_id>/category`, and notifies
+success (`Success Category: …`, Notion URL on tap) or failure
+(`Failed Category: …`). It runs in two situations:
+
+- **On a** `needs_category` **reply** (interactive only) — pick the category now,
+  which files the row and teaches the bridge the merchant for next time.
+- **From the success menu** — every successful, interactive log offers
+  **Exit / Change Category**, so a category can be corrected even after an
+  auto-fill.
+
+When the run is non-interactive (a `Flush Queue` replay), the picker is skipped:
+a `needs_category` row is simply left with its computed value for later.
+
+### Offline saving
+
+A transaction should never be lost just because the phone is offline or the
+request doesn't complete. As soon as `POST Transaction` has the dict (and an
+`_id`), it parks a copy in Actions (`queueKey`, keyed by `_id`) *before*
+sending. Offline runs notify and stop without POSTing; aborted sends never
+dequeue either — so the entry is still there next time. Logging stays instant
+with no inline retries.
+
+Draining the queue is the job of `Flush Queue`: it reads `queueKey`, and for
+each parked dict sets `interactive` to `false` and runs `POST Transaction`.
+Successful replays dequeue themselves inside `POST Transaction`; failures and
+still-offline runs leave their entries for next time. Run it by hand, or wire
+it to an automation (a daily time trigger, or "when Wi-Fi connects") so the
+queue self-heals without needing a new log.
+
+### Savings interest
+
+`Interest Manager` is not part of the logging flow — it's the client for the
+daily accrual. It POSTs to `/savings/accrue` (empty JSON body), reads
+`warnings` off the response, and shows an **Interest Warnings** notification
+only when that list has any value (otherwise it stays silent). Point a daily
+time-of-day automation at it so the accrual (and any monthly payout) runs
+without you touching it.
+
+### Flow
+
+```mermaid
+flowchart TD
+    Tap["Log (Tap)<br/>NFC automation"] -->|no input| Manual
+    Tap -->|has input| Build
+    Manual["Log (Manual)<br/>hand entry<br/>GET /accounts → cache"] --> Build
+    Build["Build raw dict<br/>card, amount, description,<br/>datetime, address, interactive=true<br/>(merchant optional)"] --> Post
+
+    subgraph Core["POST Transaction (shared core)"]
+        Post["Ensure _id → park in Actions queueKey"] --> Online{"Wi-Fi or cellular?"}
+        Online -->|no| StayOffline["Notify offline<br/>stays in queue"]
+        Online -->|yes| Send["POST /transactions"]
+        Send -->|"no reply"| Stay[("stays in queue")]
+        Send -->|"has status"| Fail["Notify: failure<br/>stays in queue"]
+        Send -->|success| Dequeue["dequeue _id"]
+        Dequeue --> Status{"Response?"}
+        Status -->|needs_category| NC{"interactive?"}
+        NC -->|yes| Update
+        NC -->|no| Leave["leave computed category"]
+        Status -->|plain success| SU{"interactive?"}
+        SU -->|yes| Menu["Notify + Exit / Change Category"]
+        SU -->|no| Notify["Notify: logged"]
+        Menu -->|Change| Update
+    end
+
+    Update["Update Category<br/>pick from all_categories<br/>POST /transactions/<id>/category"]
+
+    Flush["Flush Queue<br/>standalone + automation"] --> Replay["Each queued dict<br/>interactive=false<br/>→ POST Transaction"]
+    Replay --> Post
+
+    Interest["Interest Manager<br/>standalone + automation"] --> Accrue["POST /savings/accrue"]
+    Accrue --> Warn{"warnings?"}
+    Warn -->|yes| WarnNote["Notify: Interest Warnings"]
+    Warn -->|no| Silent["silent"]
+```
+
 ## Local development
 
 ```bash
