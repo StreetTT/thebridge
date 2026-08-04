@@ -13,7 +13,11 @@ feature survives a PythonAnywhere disk reset. :func:`sync_savings_interest`
 drives the daily pass and writes the new state back with ``update_page``.
 """
 
+import logging
+import secrets
 from datetime import date, datetime
+
+from flask import g, has_request_context
 
 from app.blueprints.transactions.service import (
     TransactionError,
@@ -21,6 +25,9 @@ from app.blueprints.transactions.service import (
     save_transaction,
 )
 from app.notion_client import NotionClient, NotionError
+from app.sentry_setup import tag_client_id
+
+_log = logging.getLogger(__name__)
 
 _ARCHIVED_PROPERTY = "Archived"
 _DAYS_PER_YEAR = 365
@@ -174,7 +181,7 @@ def accrue_interest(account: dict, today: date) -> tuple[float, float]:
 
 
 def pay_accrued_interest(
-    account: dict, config, today: date, card_label: str
+    account: dict, config, today: date, card_label: str, suffix: str
 ) -> dict | None:
     """File the accrued interest as an income transaction, or return ``None``.
 
@@ -185,6 +192,9 @@ def pay_accrued_interest(
     through the trusted :func:`save_transaction` core as an ``income`` on
     ``card_label``; on success returns the reset state to persist
     (``accrued`` back to 0, ``last_paid`` set to today).
+
+    ``suffix`` is the same 4-hex-char token as the enclosing accrue run, so the
+    payout ``_id`` (and nested transaction logs) join back to that run.
     """
     accrued = account["accrued"]
     if today.day < account["payment_day"] or accrued <= 0:
@@ -192,16 +202,42 @@ def pay_accrued_interest(
     if _in_month(account["last_paid"], today):
         return None
 
-    save_transaction(
-        {
-            "type": "income",
-            "card": card_label,
-            "amount": accrued,
-            "description": config.get("SAVINGS_INTEREST_NAME"),
-            "datetime": today.isoformat(),
-            "category": config.get("SAVINGS_INTEREST_CATEGORY"),
-        },
-        config,
+    payout_id = (
+        f"interest-{account['page_id']}-{today.strftime('%Y-%m')}-{suffix}"
+    )
+    previous_client_id = None
+    if has_request_context():
+        previous_client_id = getattr(g, "client_id", None)
+        g.client_id = payout_id
+        tag_client_id(payout_id)
+
+    try:
+        save_transaction(
+            {
+                "type": "income",
+                "card": card_label,
+                "amount": accrued,
+                "description": config.get("SAVINGS_INTEREST_NAME"),
+                "datetime": today.isoformat(),
+                "category": config.get("SAVINGS_INTEREST_CATEGORY"),
+                "_id": payout_id,
+            },
+            config,
+        )
+    finally:
+        if has_request_context():
+            if previous_client_id is None:
+                g.pop("client_id", None)
+            else:
+                g.client_id = previous_client_id
+                tag_client_id(previous_client_id)
+
+    _log.info(
+        "payout filed account=%r page_id=%s amount=%.4f _id=%s",
+        account["name"],
+        account["page_id"],
+        accrued,
+        payout_id,
     )
     return {"accrued": 0.0, "last_paid": today}
 
@@ -215,9 +251,19 @@ def sync_savings_interest(config, today: date | None = None) -> dict:
     ``update_page``. Accounts that already accrued today are skipped, so a task
     that fires twice never double-accrues or double-pays. Returns a per-account
     snapshot plus any warnings.
+
+    Each call gets a 4-hex-char ``suffix`` so concurrent same-day runs stay
+    distinct in logs; payout ``_id``s reuse that suffix.
     """
     if today is None:
         today = date.today()
+
+    suffix = secrets.token_hex(2)
+    run_id = f"accrue-{today.isoformat()}-{suffix}"
+    if has_request_context():
+        g.client_id = run_id
+        tag_client_id(run_id)
+    _log.info("Savings accrue run start run_id=%s", run_id)
 
     client = NotionClient(config.get("NOTION_TOKEN"), config.get("NOTION_VERSION"))
     accounts, warnings = interest_accounts(client, config)
@@ -229,13 +275,28 @@ def sync_savings_interest(config, today: date | None = None) -> dict:
     today_iso = today.isoformat()
 
     results: list[dict] = []
+    paid_count = 0
+    skipped_count = 0
     for account in accounts:
         if account["last_accrued"] == today:
+            _log.debug(
+                "skip already accrued account=%r page_id=%s",
+                account["name"],
+                account["page_id"],
+            )
+            skipped_count += 1
             results.append(_snapshot(account, todays_interest=0.0, paid=False))
             continue
 
         new_accrued, added = accrue_interest(account, today)
         account["accrued"] = new_accrued
+        _log.debug(
+            "accrue account=%r page_id=%s added=%.6f accrued=%.6f",
+            account["name"],
+            account["page_id"],
+            added,
+            new_accrued,
+        )
 
         properties = {
             accrued_prop: {"number": new_accrued},
@@ -254,18 +315,37 @@ def sync_savings_interest(config, today: date | None = None) -> dict:
                     "accruing."
                 )
             else:
-                reset = pay_accrued_interest(account, config, today, card_label)
+                _log.debug(
+                    "payment due account=%r page_id=%s",
+                    account["name"],
+                    account["page_id"],
+                )
+                reset = pay_accrued_interest(
+                    account, config, today, card_label, suffix
+                )
                 if reset is not None:
                     account["accrued"] = reset["accrued"]
                     account["last_paid"] = reset["last_paid"]
                     properties[accrued_prop] = {"number": reset["accrued"]}
                     properties[last_paid_prop] = {"date": {"start": today_iso}}
                     paid = True
+                    paid_count += 1
 
         account["last_accrued"] = today
         client.update_page(account["page_id"], properties)
         results.append(_snapshot(account, todays_interest=added, paid=paid))
 
+    for warning in warnings:
+        _log.warning("%s", warning)
+
+    _log.info(
+        "Savings accrue run end run_id=%s accounts=%d skipped=%d paid=%d warnings=%d",
+        run_id,
+        len(results),
+        skipped_count,
+        paid_count,
+        len(warnings),
+    )
     return {"accounts": results, "warnings": warnings}
 
 
