@@ -1,6 +1,6 @@
 # Configuration
 
-[Docs](../index.md) › Reference › Configuration
+[Docs](../index.md) › [Reference](./) › Configuration
 
 Environment variables (or a local `.env`). Copy [`.env.example`](../../.env.example) to get started.
 

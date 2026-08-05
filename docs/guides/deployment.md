@@ -1,6 +1,6 @@
 # Deployment
 
-[Docs](../index.md) › Guides › Deployment
+[Docs](../index.md) › [Guides](./) › Deployment
 
 ## Overview
 

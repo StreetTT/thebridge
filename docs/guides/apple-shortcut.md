@@ -1,6 +1,6 @@
 # Apple Shortcut
 
-[Docs](../index.md) › Guides › Apple Shortcut
+[Docs](../index.md) › [Guides](./) › Apple Shortcut
 
 ## Overview
 

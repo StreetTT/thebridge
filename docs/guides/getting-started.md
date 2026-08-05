@@ -1,6 +1,6 @@
 # Getting started
 
-[Docs](../index.md) › Guides › Getting started
+[Docs](../index.md) › [Guides](./) › Getting started
 
 ## Overview
 

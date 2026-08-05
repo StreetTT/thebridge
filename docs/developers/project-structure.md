@@ -1,6 +1,6 @@
 # Project structure
 
-[Docs](../index.md) › Developers › Project structure
+[Docs](../index.md) › [Developers](./) › Project structure
 
 ## Layout
 

@@ -1,6 +1,6 @@
 # Accounts
 
-[Docs](../index.md) › Guides › Accounts
+[Docs](../index.md) › [Guides](./) › Accounts
 
 ## Overview
 

@@ -1,6 +1,6 @@
 # Categories
 
-[Docs](../index.md) › Guides › Categories
+[Docs](../index.md) › [Guides](./) › Categories
 
 ## Overview
 

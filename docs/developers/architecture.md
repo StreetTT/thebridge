@@ -1,6 +1,6 @@
 # Architecture
 
-[Docs](../index.md) › Developers › Architecture
+[Docs](../index.md) › [Developers](./) › Architecture
 
 ## Overview
 

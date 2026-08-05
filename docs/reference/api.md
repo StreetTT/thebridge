@@ -1,6 +1,6 @@
 # API reference
 
-[Docs](../index.md) › Reference › API
+[Docs](../index.md) › [Reference](./) › API
 
 Every endpoint. Auth is the `X-API-Key` header matching `API_SECRET`, unless noted public. Errors use `{status, message}` unless noted otherwise. For behaviour and Notion setup, see the guides.
 
