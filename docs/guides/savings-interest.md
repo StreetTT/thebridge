@@ -47,6 +47,7 @@ The first payout after enabling covers only the days accrued so far that month (
 
 ## Related
 
+- [Notion schema](./notion-schema.md)
 - [Accounts](./accounts.md)
 - [Deployment](./deployment.md)
 - [Apple Shortcut](./apple-shortcut.md) (Interest Manager)

@@ -41,6 +41,7 @@ The resolved map is cached in-process for an hour, so a newly edited link may ta
 
 ## Related
 
+- [Notion schema](./notion-schema.md)
 - [Transactions](./transactions.md)
 - [Apple Shortcut](./apple-shortcut.md)
 - [Savings interest](./savings-interest.md) (payouts also need a resolvable card)

@@ -53,6 +53,7 @@ If `category` is omitted, merchant memory may auto-fill or flag `needs_category`
 
 ## Related
 
+- [Notion schema](./notion-schema.md)
 - [Accounts](./accounts.md)
 - [Categories](./categories.md)
 - [Apple Shortcut](./apple-shortcut.md)

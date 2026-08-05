@@ -47,6 +47,7 @@ Confirm or correct with `POST /transactions/<page_id>/category` — see [API](..
 
 ## Related
 
+- [Notion schema](./notion-schema.md)
 - [Transactions](./transactions.md)
 - [Apple Shortcut](./apple-shortcut.md)
 - [API reference](../reference/api.md)

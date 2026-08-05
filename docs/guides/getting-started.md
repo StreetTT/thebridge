@@ -44,6 +44,7 @@ curl -H "X-API-Key: <API_SECRET>" http://127.0.0.1:5000/health/auth
 
 ## Related
 
+- [Notion schema](./notion-schema.md)
 - [Configuration](../reference/configuration.md)
 - [Deployment](./deployment.md)
 - [API reference](../reference/api.md)
