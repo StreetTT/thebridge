@@ -38,7 +38,7 @@ def is_duplicate_submission(player_name: str, game_number: int) -> bool:
     }
     
     # Use the client's internal _post method to query the standard database endpoint
-    results = client._post(f"/databases/{KRILLION_DB_ID}/query", payload)
+    results = client._post(f"/data_sources/{KRILLION_DB_ID}/query", payload)
     return len(results.get("results", [])) > 0
 
 
@@ -49,7 +49,7 @@ def save_krillion_result(player_name: str, parsed_data: dict) -> dict:
     client = _get_client()
     
     new_page_payload = {
-        "parent": {"database_id": KRILLION_DB_ID},
+        "parent": {"data_source_id": KRILLION_DB_ID},
         "properties": {
             "Name": {
                 "title": [{"text": {"content": player_name}}]
