@@ -53,7 +53,7 @@ def get_or_create_player(player_name: str) -> str:
     else:
         # 3. Auto-Create
         new_page_id,_ = client.create_page({
-            "parent":{"database_id": PLAYERS_DB_ID},
+            "parent":{"data_source_id": PLAYERS_DB_ID},
             "properties":{
                 "Name": {"title": [{"text": {"content": player_name}}]}
             }
