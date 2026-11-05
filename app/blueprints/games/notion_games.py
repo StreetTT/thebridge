@@ -1,16 +1,24 @@
 import os
-from app.notion_client import query_database, create_page # Assumed imports from your existing client
+from flask import current_app
+from app.notion_client import NotionClient
 
-# Ensure this is added to your .env file
 KRILLION_DB_ID = os.getenv("NOTION_KRILLION_DB_ID")
+
+def _get_client() -> NotionClient:
+    """Instantiates the existing NotionClient class using the app's tokens."""
+    return NotionClient(
+        token=current_app.config.get("NOTION_TOKEN"),
+        version=current_app.config.get("NOTION_VERSION", "2022-06-28")
+    )
 
 def is_duplicate_submission(player_name: str, game_number: int) -> bool:
     """
     Queries Notion for an existing entry matching BOTH the player_name and the game number.
     Returns True if a match is found, rejecting the request (first come, first serve).
     """
-    query_payload = {
-        "database_id": KRILLION_DB_ID,
+    client = _get_client()
+    
+    payload = {
         "filter": {
             "and": [
                 {
@@ -29,14 +37,17 @@ def is_duplicate_submission(player_name: str, game_number: int) -> bool:
         }
     }
     
-    results = query_database(query_payload)
-    return len(results) > 0
+    # Use the client's internal _post method to query the standard database endpoint
+    results = client._post(f"/databases/{KRILLION_DB_ID}/query", payload)
+    return len(results.get("results", [])) > 0
 
 
 def save_krillion_result(player_name: str, parsed_data: dict) -> dict:
     """
-    Writes a new Krillion result to the Notion database mapping emojis to positional columns.
+    Writes a new Krillion result to the Notion database mapping emojis to positional Select columns.
     """
+    client = _get_client()
+    
     new_page_payload = {
         "parent": {"database_id": KRILLION_DB_ID},
         "properties": {
@@ -59,4 +70,6 @@ def save_krillion_result(player_name: str, parsed_data: dict) -> dict:
         }
     }
     
-    return create_page(new_page_payload)
+    # The existing client.create_page returns a (page_id, url) tuple
+    page_id, url = client.create_page(new_page_payload)
+    return {"id": page_id, "url": url}
