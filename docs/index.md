@@ -7,16 +7,17 @@ Pick a lane:
 ## Guides
 
 
-| Guide                                            | What it's for                                |
-| ------------------------------------------------ | -------------------------------------------- |
-| [Getting started](./guides/getting-started.md)   | Local venv, `.env`, smoke test               |
-| [Notion schema](./guides/notion-schema.md)       | Template link, databases, properties, usage  |
-| [Apple Shortcut](./guides/apple-shortcut.md)     | Client contract, suite layout, offline queue |
-| [Transactions](./guides/transactions.md)         | Logging a transaction (model + gotchas)      |
-| [Accounts](./guides/accounts.md)                 | Linking cards to Notion accounts             |
-| [Categories](./guides/categories.md)             | Merchant memory and category prompts         |
-| [Savings interest](./guides/savings-interest.md) | Enabling and running daily accrual/payout    |
-| [Deployment](./guides/deployment.md)             | PythonAnywhere + scheduled task + logging    |
+| Guide                                            | What it's for                                     |
+| ------------------------------------------------ | ------------------------------------------------- |
+| [Getting started](./guides/getting-started.md)   | Local venv, `.env`, smoke test                    |
+| [Notion schema](./guides/notion-schema.md)       | Template link, databases, properties, usage       |
+| [Apple Shortcut](./guides/apple-shortcut.md)     | Client contract, suite layout, offline queue      |
+| [Transactions](./guides/transactions.md)         | Logging a transaction (model + gotchas)           |
+| [Accounts](./guides/accounts.md)                 | Linking cards to Notion accounts                  |
+| [Categories](./guides/categories.md)             | Merchant memory and category prompts              |
+| [Savings interest](./guides/savings-interest.md) | Enabling and running daily accrual/payout         |
+| [Krillion](./guides/krillion.md)                 | Import [Krillion](https://krillion.io/) daily result for a leaderboard     |
+| [Deployment](./guides/deployment.md)             | PythonAnywhere + scheduled task + logging         |
 
 
 
