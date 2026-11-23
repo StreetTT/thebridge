@@ -83,6 +83,10 @@ def is_duplicate_submission(player_id: str, game_number: int) -> bool:
                 {
                     "property": "Game",
                     "number": {"equals": game_number}
+                },
+                {
+                    "property": "Redive",
+                    "checkbox": {"does_not_equal": True}
                 }
             ]
         }
@@ -112,6 +116,9 @@ def save_krillion_result(player_id: str, parsed_data: dict) -> dict:
             },
             "Score": {
                 "number": parsed_data["score"]
+            },
+            "Redive": {
+                "checkbox": parsed_data["redive"]
             },
             "1": {"select": {"name": parsed_data["positions"]["1"]}},
             "2": {"select": {"name": parsed_data["positions"]["2"]}},

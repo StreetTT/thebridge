@@ -14,20 +14,27 @@ def parse_krillion_text(raw_text: str) -> dict:
         raise ValueError("No raw text provided.")
 
     # 1. Extract Game Number
-    # Looks for 'Krillion #' followed by digits
-    game_match = re.search(r'Krillion #(\d+)', raw_text)
+    # Looks for '#' followed by digits
+    game_match = re.search(r'#(\d+)', raw_text)
     if not game_match:
         raise ValueError("Could not find Krillion game number in text.")
     game_number = int(game_match.group(1))
 
-    # 2. Extract Score
+    # 2. Extract Re Dive Status
+    # Looks for '⟲' to indicate a "Redive"
+    redive_match = re.search(r'⟲', raw_text)
+    redive = False
+    if redive_match:
+        redive = True
+
+    # 3. Extract Score
     # Looks for a standalone number on its own line (usually line 2)
     score_match = re.search(r'\n(\d+)\n', raw_text)
     if not score_match:
         raise ValueError("Could not find score in text.")
     score = int(score_match.group(1))
 
-    # 3. Extract Emojis
+    # 4. Extract Emojis
     # Cleans empty lines and grabs the final line which contains the dive sequence
     lines = [line.strip() for line in raw_text.strip().split('\n') if line.strip()]
     if len(lines) < 3:
@@ -40,10 +47,11 @@ def parse_krillion_text(raw_text: str) -> dict:
     if len(emojis) != 7:
         raise ValueError(f"Expected exactly 7 emojis in the dive sequence, found {len(emojis)}.")
 
-    # 4. Return structured dictionary
+    # 5. Return structured dictionary
     return {
         "game": game_number,
         "score": score,
+        "redive": redive,
         "positions": {
             "1": emojis[0],
             "2": emojis[1],
@@ -56,7 +64,7 @@ def parse_krillion_text(raw_text: str) -> dict:
     }
 
 if __name__ == "__main__":
-    print(parse_krillion_text("""Krillion #107 🦐
-250
-    
-🐟⬛🦑🦑🫧🦑🐟"""))
+    print(parse_krillion_text("""Krillion ⟲ #1 🦐
+360
+
+🫧🦑🐟🏮🐟🦑🏮"""))

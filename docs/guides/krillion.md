@@ -13,6 +13,7 @@ The Apple Shortcut prompts the user for their name and passes it along with the 
 ### Parsing Logic
 Handled within `app/blueprints/games/krillion_parser.py`:
 1. **Game Number:** Extracts the integer following the `#` symbol (e.g., `113`).
+1. **Redive:** Attempts to extract the `⟲` symbol, its existence resulting in a boolean value.
 2. **Score:** Extracts the numerical score from the second line (e.g., `365`).
 3. **Emojis:** Slices the exactly 7 emojis from the final line and maps them strictly by their position (1 through 7) in the dive sequence.
 
@@ -24,7 +25,7 @@ To prevent excessive Notion API calls and survive PythonAnywhere worker restarts
 3. **Auto-Create:** If the query returns no results, the app automatically creates a new page in the Players database (populating only the `Name` property) and caches the newly generated Page ID.
 
 ### Duplicate Handling
-Submissions are first-come, first-serve. Before writing to the database, the backend queries Notion for an existing entry where `Game` equals the incoming game number AND the `Player` relation equals the resolved Page ID. If a match is found, the request is safely rejected.
+Initial Submissions are first-come, first-serve. Before writing to the database, the backend queries Notion for an existing initial game where `Game` equals the incoming game number AND the `Player` relation equals the resolved Page ID. If a match is found, the request is safely rejected. For Redive-s, an infinite number is allowed. 
 
 ## Setup / enabling
 
@@ -38,6 +39,7 @@ Submissions are first-come, first-serve. Before writing to the database, the bac
 | `Player` | relation | **bridge-required** – Replaces the text title. Payload sends an array containing exactly 1 item (the player's Page ID). |
 | `Game` | number | **bridge-required** – The Krillion game number; used for duplicate checking. |
 | `Score` | number | **bridge-required** – The total score achieved. |
+| `Redive` | checkbox | **bridge-required** – Whether these are redive results. |
 | `1` through `7` | select | **bridge-required** – Seven distinct select columns mapping the emoji caught at each specific depth. |
 
 ## Endpoints

@@ -25,10 +25,10 @@ def submit_krillion():
         # Resolve identity via cache or Notion
         player_id = get_or_create_player(player_name)
         
-        # Prevent duplicate submissions using relation ID
-        if is_duplicate_submission(player_id, game_number):
+        # Prevent duplicate first time submissions using relation ID
+        if not data['redive'] and is_duplicate_submission(player_id, game_number):
             return jsonify({
-                "message": f"Submission skipped. {player_name} already submitted Game #{game_number}."
+                "message": f"Submission skipped. {player_name} already submitted their first Game #{game_number}."
             }), 409
             
         # 4. Save to Notion
